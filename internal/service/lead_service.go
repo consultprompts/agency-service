@@ -22,8 +22,20 @@ func (s *LeadService) CreateLead(ctx context.Context, userID string, lead model.
 	return s.leadRepo.CreateLead(ctx, lead)
 }
 
-func (s *LeadService) GetAllLeads(ctx context.Context) ([]model.Lead, error) {
-	return s.leadRepo.GetAllLeads(ctx)
+func (s *LeadService) GetLeads(ctx context.Context, page, limit int) ([]model.Lead, int, error) {
+	offset := (page - 1) * limit
+
+	leads, err := s.leadRepo.GetLeads(ctx, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	total, err := s.leadRepo.CountLeads(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return leads, total, nil
 }
 
 func (s *LeadService) UpdateLeadStatus(ctx context.Context, id string, status string) error {

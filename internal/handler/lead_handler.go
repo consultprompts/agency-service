@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -52,13 +54,52 @@ func (h *LeadHandler) CreateLead(c *gin.Context) {
 	respondCreated(c, created)
 }
 
+const (
+	defaultLeadsLimit = 20
+	maxLeadsLimit     = 100
+)
+
+type Pagination struct {
+	Page       int `json:"page"`
+	Limit      int `json:"limit"`
+	Total      int `json:"total"`
+	TotalPages int `json:"total_pages"`
+}
+
+type LeadsResponse struct {
+	Leads      []model.Lead `json:"leads"`
+	Pagination Pagination   `json:"pagination"`
+}
+
 func (h *LeadHandler) GetLeads(c *gin.Context) {
-	leads, err := h.leadService.GetAllLeads(c.Request.Context())
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil || page < 1 {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", "page must be a positive integer")
+		return
+	}
+
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", strconv.Itoa(defaultLeadsLimit)))
+	if err != nil || limit < 1 || limit > maxLeadsLimit {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT",
+			fmt.Sprintf("limit must be between 1 and %d", maxLeadsLimit))
+		return
+	}
+
+	leads, total, err := h.leadService.GetLeads(c.Request.Context(), page, limit)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	respondOK(c, leads)
+
+	respondOK(c, LeadsResponse{
+		Leads: leads,
+		Pagination: Pagination{
+			Page:       page,
+			Limit:      limit,
+			Total:      total,
+			TotalPages: (total + limit - 1) / limit,
+		},
+	})
 }
 
 type UpdateStatusRequest struct {

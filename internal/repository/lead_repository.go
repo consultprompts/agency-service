@@ -37,14 +37,15 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 	return &lead, nil
 }
 
-func (repo *LeadRepository) GetAllLeads(ctx context.Context) ([]model.Lead, error) {
+func (repo *LeadRepository) GetLeads(ctx context.Context, limit, offset int) ([]model.Lead, error) {
 	query := `
 		SELECT id, user_id, name, email, business, message, package, status, created_at
 		FROM leads
 		ORDER BY created_at DESC
+		LIMIT $1 OFFSET $2
 	`
 
-	rows, err := repo.db.Query(ctx, query)
+	rows, err := repo.db.Query(ctx, query, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +71,12 @@ func (repo *LeadRepository) GetAllLeads(ctx context.Context) ([]model.Lead, erro
 	}
 
 	return leads, nil
+}
+
+func (repo *LeadRepository) CountLeads(ctx context.Context) (int, error) {
+	var total int
+	err := repo.db.QueryRow(ctx, `SELECT COUNT(*) FROM leads`).Scan(&total)
+	return total, err
 }
 
 func (repo *LeadRepository) UpdateLeadStatus(ctx context.Context, id string, status string) error {
