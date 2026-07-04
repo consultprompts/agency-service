@@ -6,6 +6,10 @@ import (
 	"os"
 
 	database "github.com/consultprompts/agency-service/database"
+	"github.com/consultprompts/agency-service/internal/handler"
+	"github.com/consultprompts/agency-service/internal/middleware"
+	"github.com/consultprompts/agency-service/internal/repository"
+	"github.com/consultprompts/agency-service/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
@@ -34,6 +38,23 @@ func main() {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+
+	leadRepo := repository.NewLeadRepository(pool)
+	leadService := service.NewLeadService(leadRepo)
+	leadHandler := handler.NewLeadHandler(leadService)
+
+	protected := router.Group("/")
+	protected.Use(middleware.RequireUserID())
+	{
+		protected.POST("/agency/leads", leadHandler.CreateLead)
+
+		admin := protected.Group("/")
+		admin.Use(middleware.RequireAdminRole())
+		{
+			admin.GET("/agency/leads", leadHandler.GetLeads)
+			admin.PATCH("/agency/leads/:id/status", leadHandler.UpdateLeadStatus)
+		}
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
