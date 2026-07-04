@@ -50,7 +50,7 @@ func (repo *LeadRepository) GetAllLeads(ctx context.Context) ([]model.Lead, erro
 	}
 	defer rows.Close()
 
-	var leads []model.Lead
+	leads := make([]model.Lead, 0)
 	for rows.Next() {
 		var lead model.Lead
 		if err := rows.Scan(
