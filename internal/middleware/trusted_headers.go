@@ -28,20 +28,20 @@ func RequireUserID() gin.HandlerFunc {
 	}
 }
 
+// IsAdmin reports whether the gateway-set X-User-Roles header includes
+// the admin role.
+func IsAdmin(c *gin.Context) bool {
+	for _, r := range strings.Split(c.GetHeader("X-User-Roles"), ",") {
+		if strings.TrimSpace(r) == "admin" {
+			return true
+		}
+	}
+	return false
+}
+
 func RequireAdminRole() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		rolesHeader := c.GetHeader("X-User-Roles")
-		roles := strings.Split(rolesHeader, ",")
-
-		isAdmin := false
-		for _, r := range roles {
-			if strings.TrimSpace(r) == "admin" {
-				isAdmin = true
-				break
-			}
-		}
-
-		if !isAdmin {
+		if !IsAdmin(c) {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"error": gin.H{

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	database "github.com/consultprompts/agency-service/database"
+	"github.com/consultprompts/agency-service/internal/email"
 	"github.com/consultprompts/agency-service/internal/handler"
 	"github.com/consultprompts/agency-service/internal/middleware"
 	"github.com/consultprompts/agency-service/internal/repository"
@@ -39,20 +40,37 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	emailClient := email.NewEmailClient()
+	if emailClient == nil {
+		slog.Warn("Lead email notifications disabled — set RESEND_API_KEY, RESEND_FROM and LEAD_NOTIFICATION_EMAIL to enable")
+	}
+
 	leadRepo := repository.NewLeadRepository(pool)
-	leadService := service.NewLeadService(leadRepo)
+	var notifier service.LeadNotifier
+	if emailClient != nil {
+		notifier = emailClient
+	}
+	leadService := service.NewLeadService(leadRepo, notifier)
 	leadHandler := handler.NewLeadHandler(leadService)
+
+	milestoneRepo := repository.NewMilestoneRepository(pool)
+	milestoneService := service.NewMilestoneService(milestoneRepo, leadRepo)
+	milestoneHandler := handler.NewMilestoneHandler(milestoneService)
 
 	protected := router.Group("/")
 	protected.Use(middleware.RequireUserID())
 	{
 		protected.POST("/agency/leads", leadHandler.CreateLead)
+		protected.GET("/agency/leads/:id/milestones", milestoneHandler.GetMilestones)
 
 		admin := protected.Group("/")
 		admin.Use(middleware.RequireAdminRole())
 		{
 			admin.GET("/agency/leads", leadHandler.GetLeads)
 			admin.PATCH("/agency/leads/:id/status", leadHandler.UpdateLeadStatus)
+			admin.POST("/agency/leads/:id/milestones", milestoneHandler.CreateMilestone)
+			admin.PATCH("/agency/milestones/:id", milestoneHandler.UpdateMilestone)
+			admin.DELETE("/agency/milestones/:id", milestoneHandler.DeleteMilestone)
 		}
 	}
 

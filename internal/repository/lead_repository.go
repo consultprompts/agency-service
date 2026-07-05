@@ -37,6 +37,32 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 	return &lead, nil
 }
 
+func (repo *LeadRepository) GetLeadByID(ctx context.Context, id string) (*model.Lead, error) {
+	query := `
+		SELECT id, user_id, name, email, business, message, package, status, created_at
+		FROM leads
+		WHERE id = $1
+	`
+
+	var lead model.Lead
+	err := repo.db.QueryRow(ctx, query, id).Scan(
+		&lead.ID,
+		&lead.UserID,
+		&lead.Name,
+		&lead.Email,
+		&lead.Business,
+		&lead.Message,
+		&lead.Package,
+		&lead.Status,
+		&lead.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &lead, nil
+}
+
 func (repo *LeadRepository) GetLeads(ctx context.Context, limit, offset int) ([]model.Lead, error) {
 	query := `
 		SELECT id, user_id, name, email, business, message, package, status, created_at

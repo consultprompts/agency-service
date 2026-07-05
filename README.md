@@ -10,17 +10,21 @@ Sits behind the API Gateway — never exposed directly to the internet.
 
 - Lead capture — name, email, business, message, selected package
 - Lead status tracking (`pending` / `completed`)
-- Nothing else yet (onboarding questionnaires, milestone tracking, and
-  project management are future additions per the original architecture
-  plan — not built in this v1)
+- Email notification to the site owner when a new lead is submitted
+  (via Resend; optional — disabled when the env vars aren't set)
+- Milestone tracking for custom website builds — admins create/update/delete
+  milestones on a lead; the lead's submitter can view their own project's
+  milestones (`pending` / `in_progress` / `completed`)
+- Nothing else yet (onboarding questionnaires and full project management
+  are future additions per the original architecture plan)
 
 ## What this service does NOT do
 
 - No JWT verification — trusts `X-User-ID` / `X-User-Roles` headers set
   by the API Gateway. Must never be reachable directly from outside the
   Docker network in production.
-- No email sending (that's auth-service's job for account-related email;
-  lead notifications aren't built yet).
+- No account-related email (that's auth-service's job) — this service only
+  sends new-lead notifications.
 - No payment processing (that's Order & Payment service's job).
 
 ---
@@ -73,14 +77,20 @@ agency-service/
     handler/
       response.go                # standardized {success, data, error} response helpers
       lead_handler.go             # HTTP handlers for lead endpoints
+      milestone_handler.go        # HTTP handlers for milestone endpoints
     service/
-      lead_service.go             # business logic, status validation
+      lead_service.go             # business logic, status validation, notification trigger
+      milestone_service.go        # milestone logic, ownership checks
     repository/
       lead_repository.go          # SQL queries (pgx)
+      milestone_repository.go
     model/
       lead.go                     # Lead struct
+      milestone.go                # Milestone struct
     middleware/
-      trusted_headers.go          # RequireUserID, RequireAdminRole
+      trusted_headers.go          # RequireUserID, RequireAdminRole, IsAdmin
+    email/
+      email.go                    # Resend client, new-lead notification
   migrations/
     0001_init.up.sql / .down.sql
   .env                            # local secrets (gitignored)
@@ -96,6 +106,7 @@ agency-service/
 | Table | Description |
 |-------|-------------|
 | `leads` | id, user_id, name, email, business, message (nullable), package (nullable), status, created_at |
+| `milestones` | id, lead_id (FK → leads, cascade delete), title, description (nullable), status, sort_order, due_date (nullable), completed_at (nullable, set automatically on status transitions), created_at |
 
 ---
 
@@ -107,6 +118,10 @@ agency-service/
 | POST | /agency/leads | Yes (any authenticated user) | Submit a mockup request |
 | GET | /agency/leads | Yes (admin only) | List all leads |
 | PATCH | /agency/leads/:id/status | Yes (admin only) | Update lead status |
+| GET | /agency/leads/:id/milestones | Yes (lead owner or admin) | List a lead's milestones |
+| POST | /agency/leads/:id/milestones | Yes (admin only) | Create a milestone on a lead |
+| PATCH | /agency/milestones/:id | Yes (admin only) | Partially update a milestone (title, description, status, sort_order, due_date) |
+| DELETE | /agency/milestones/:id | Yes (admin only) | Delete a milestone |
 
 All routes except `/healthz` require the request to have passed through
 the API Gateway's JWT verification — this service reads `X-User-ID` and
@@ -191,14 +206,18 @@ docker compose up --build
 | DB_PASSWORD | Postgres password | yourpassword |
 | DB_NAME | Database name | agency-database |
 | DB_SSLMODE | SSL mode | disable |
+| RESEND_API_KEY | Resend API key for lead notifications (optional) | re_... |
+| RESEND_FROM | From address for notification emails (optional) | noreply@consultprompts.com |
+| LEAD_NOTIFICATION_EMAIL | Where new-lead notifications are sent (optional) | you@example.com |
+
+Lead email notifications require all three `RESEND_*`/`LEAD_NOTIFICATION_EMAIL`
+variables — if any is missing, the service starts normally with notifications
+disabled (logged as a warning at startup). Sending happens in a background
+goroutine after the lead is stored, so email failures never fail lead creation.
 
 ---
 
 ## TODO
 
-- [ ] Onboarding questionnaire (per original architecture scope)
-- [ ] Milestone tracking for custom website builds
-- [ ] Email notification when a new lead is submitted
 - [ ] Automated tests (service layer, mirroring auth-service's approach)
-- [ ] Pagination on `GET /agency/leads` (fine for now at low volume)
 
