@@ -3,11 +3,14 @@ module github.com/consultprompts/agency-service
 go 1.26.4
 
 require (
+	github.com/consultprompts/shared/email v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 )
+
+replace github.com/consultprompts/shared/email => ../shared/email
 
 require (
 	github.com/bytedance/gopkg v0.1.3 // indirect
