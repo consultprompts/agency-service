@@ -13,7 +13,10 @@ import (
 // notifications without changing lead creation behavior.
 type LeadNotifier interface {
 	SendNewLeadNotification(lead model.Lead) error
+	SendLeadConfirmation(lead model.Lead) error
 }
+
+var ErrActiveLeadExists = errors.New("you already have an active lead; a new one can be submitted once the current lead is completed")
 
 type LeadService struct {
 	leadRepo *repository.LeadRepository
@@ -25,6 +28,14 @@ func NewLeadService(leadRepo *repository.LeadRepository, notifier LeadNotifier) 
 }
 
 func (s *LeadService) CreateLead(ctx context.Context, userID string, lead model.Lead) (*model.Lead, error) {
+	active, err := s.leadRepo.HasActiveLead(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if active {
+		return nil, ErrActiveLeadExists
+	}
+
 	lead.UserID = userID
 	lead.Status = "pending"
 
@@ -33,11 +44,14 @@ func (s *LeadService) CreateLead(ctx context.Context, userID string, lead model.
 		return nil, err
 	}
 
-	// Notify asynchronously — a failed email must not fail lead creation.
+	// Notify asynchronously — email failures must not fail lead creation.
 	if s.notifier != nil {
 		go func(l model.Lead) {
 			if err := s.notifier.SendNewLeadNotification(l); err != nil {
 				slog.Error("Failed to send new lead notification", "lead_id", l.ID, "error", err)
+			}
+			if err := s.notifier.SendLeadConfirmation(l); err != nil {
+				slog.Error("Failed to send lead confirmation to submitter", "lead_id", l.ID, "error", err)
 			}
 		}(*created)
 	}

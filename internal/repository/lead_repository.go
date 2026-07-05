@@ -105,6 +105,15 @@ func (repo *LeadRepository) CountLeads(ctx context.Context) (int, error) {
 	return total, err
 }
 
+func (repo *LeadRepository) HasActiveLead(ctx context.Context, userID string) (bool, error) {
+	var count int
+	err := repo.db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM leads WHERE user_id = $1 AND status != 'completed'`,
+		userID,
+	).Scan(&count)
+	return count > 0, err
+}
+
 func (repo *LeadRepository) UpdateLeadStatus(ctx context.Context, id string, status string) error {
 	query := `UPDATE leads SET status = $1 WHERE id = $2`
 

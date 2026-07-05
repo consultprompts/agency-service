@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -47,6 +48,10 @@ func (h *LeadHandler) CreateLead(c *gin.Context) {
 
 	created, err := h.leadService.CreateLead(c.Request.Context(), userID.(string), lead)
 	if err != nil {
+		if errors.Is(err, service.ErrActiveLeadExists) {
+			respondError(c, http.StatusConflict, "ACTIVE_LEAD_EXISTS", err.Error())
+			return
+		}
 		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
