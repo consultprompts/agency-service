@@ -3,7 +3,7 @@ module github.com/consultprompts/agency-service
 go 1.26.4
 
 require (
-	github.com/consultprompts/shared/email v0.0.0-20260705111609-eee4f5dc0766
+	github.com/consultprompts/shared/email v0.0.0-20260705123151-357c1f4756ef
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.10.0
