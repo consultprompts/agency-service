@@ -42,7 +42,6 @@ func (c *Client) SendNewLeadNotification(lead model.Lead) error {
 		Email:     lead.Email,
 		Business:  lead.Business,
 		Package:   lead.Package,
-		Message:   lead.Message,
 		CreatedAt: lead.CreatedAt,
 	})
 }

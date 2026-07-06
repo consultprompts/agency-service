@@ -15,11 +15,62 @@ func NewLeadRepository(db *pgxpool.Pool) *LeadRepository {
 	return &LeadRepository{db: db}
 }
 
+const leadColumns = `
+	id, user_id, name, email, business,
+	existing_website, existing_website_url,
+	site_goal, pages_needed, style_direction,
+	has_logo, logo_url, has_brand_colors, primary_color, secondary_color,
+	inspiration_urls, phone_number, contact_method, timeline,
+	package, status, milestone_index, created_at`
+
+func scanLead(row interface {
+	Scan(...any) error
+}, lead *model.Lead) error {
+	return row.Scan(
+		&lead.ID,
+		&lead.UserID,
+		&lead.Name,
+		&lead.Email,
+		&lead.Business,
+		&lead.ExistingWebsite,
+		&lead.ExistingWebsiteURL,
+		&lead.SiteGoal,
+		&lead.PagesNeeded,
+		&lead.StyleDirection,
+		&lead.HasLogo,
+		&lead.LogoURL,
+		&lead.HasBrandColors,
+		&lead.PrimaryColor,
+		&lead.SecondaryColor,
+		&lead.InspirationURLs,
+		&lead.PhoneNumber,
+		&lead.ContactMethod,
+		&lead.Timeline,
+		&lead.Package,
+		&lead.Status,
+		&lead.MilestoneIndex,
+		&lead.CreatedAt,
+	)
+}
+
 func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*model.Lead, error) {
 	query := `
-		INSERT INTO leads (user_id, name, email, business, message, package)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, created_at, status, milestone_index
+		INSERT INTO leads (
+			user_id, name, email, business,
+			existing_website, existing_website_url,
+			site_goal, pages_needed, style_direction,
+			has_logo, logo_url, has_brand_colors, primary_color, secondary_color,
+			inspiration_urls, phone_number, contact_method, timeline,
+			package
+		) VALUES (
+			$1, $2, $3, $4,
+			$5, $6,
+			$7, $8, $9,
+			$10, $11, $12, $13, $14,
+			$15, $16, $17, $18,
+			$19
+		)
+		RETURNING id, status, milestone_index, created_at
 	`
 
 	err := repo.db.QueryRow(ctx, query,
@@ -27,9 +78,22 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 		lead.Name,
 		lead.Email,
 		lead.Business,
-		lead.Message,
+		lead.ExistingWebsite,
+		lead.ExistingWebsiteURL,
+		lead.SiteGoal,
+		lead.PagesNeeded,
+		lead.StyleDirection,
+		lead.HasLogo,
+		lead.LogoURL,
+		lead.HasBrandColors,
+		lead.PrimaryColor,
+		lead.SecondaryColor,
+		lead.InspirationURLs,
+		lead.PhoneNumber,
+		lead.ContactMethod,
+		lead.Timeline,
 		lead.Package,
-	).Scan(&lead.ID, &lead.CreatedAt, &lead.Status, &lead.MilestoneIndex)
+	).Scan(&lead.ID, &lead.Status, &lead.MilestoneIndex, &lead.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -38,26 +102,10 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 }
 
 func (repo *LeadRepository) GetLeadByID(ctx context.Context, id string) (*model.Lead, error) {
-	query := `
-		SELECT id, user_id, name, email, business, message, package, status, milestone_index, created_at
-		FROM leads
-		WHERE id = $1
-	`
+	query := `SELECT` + leadColumns + `FROM leads WHERE id = $1`
 
 	var lead model.Lead
-	err := repo.db.QueryRow(ctx, query, id).Scan(
-		&lead.ID,
-		&lead.UserID,
-		&lead.Name,
-		&lead.Email,
-		&lead.Business,
-		&lead.Message,
-		&lead.Package,
-		&lead.Status,
-		&lead.MilestoneIndex,
-		&lead.CreatedAt,
-	)
-	if err != nil {
+	if err := scanLead(repo.db.QueryRow(ctx, query, id), &lead); err != nil {
 		return nil, err
 	}
 
@@ -65,12 +113,7 @@ func (repo *LeadRepository) GetLeadByID(ctx context.Context, id string) (*model.
 }
 
 func (repo *LeadRepository) GetLeads(ctx context.Context, limit, offset int) ([]model.Lead, error) {
-	query := `
-		SELECT id, user_id, name, email, business, message, package, status, milestone_index, created_at
-		FROM leads
-		ORDER BY created_at DESC
-		LIMIT $1 OFFSET $2
-	`
+	query := `SELECT` + leadColumns + `FROM leads ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 
 	rows, err := repo.db.Query(ctx, query, limit, offset)
 	if err != nil {
@@ -81,18 +124,7 @@ func (repo *LeadRepository) GetLeads(ctx context.Context, limit, offset int) ([]
 	leads := make([]model.Lead, 0)
 	for rows.Next() {
 		var lead model.Lead
-		if err := rows.Scan(
-			&lead.ID,
-			&lead.UserID,
-			&lead.Name,
-			&lead.Email,
-			&lead.Business,
-			&lead.Message,
-			&lead.Package,
-			&lead.Status,
-			&lead.MilestoneIndex,
-			&lead.CreatedAt,
-		); err != nil {
+		if err := scanLead(rows, &lead); err != nil {
 			return nil, err
 		}
 		leads = append(leads, lead)
@@ -117,12 +149,7 @@ func (repo *LeadRepository) HasActiveLead(ctx context.Context, userID string) (b
 }
 
 func (repo *LeadRepository) GetLeadsByUserID(ctx context.Context, userID string) ([]model.Lead, error) {
-	query := `
-		SELECT id, user_id, name, email, business, message, package, status, milestone_index, created_at
-		FROM leads
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-	`
+	query := `SELECT` + leadColumns + `FROM leads WHERE user_id = $1 ORDER BY created_at DESC`
 
 	rows, err := repo.db.Query(ctx, query, userID)
 	if err != nil {
@@ -133,18 +160,7 @@ func (repo *LeadRepository) GetLeadsByUserID(ctx context.Context, userID string)
 	leads := make([]model.Lead, 0)
 	for rows.Next() {
 		var lead model.Lead
-		if err := rows.Scan(
-			&lead.ID,
-			&lead.UserID,
-			&lead.Name,
-			&lead.Email,
-			&lead.Business,
-			&lead.Message,
-			&lead.Package,
-			&lead.Status,
-			&lead.MilestoneIndex,
-			&lead.CreatedAt,
-		); err != nil {
+		if err := scanLead(rows, &lead); err != nil {
 			return nil, err
 		}
 		leads = append(leads, lead)

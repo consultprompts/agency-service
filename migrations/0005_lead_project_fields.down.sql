@@ -1,0 +1,16 @@
+ALTER TABLE leads
+    ADD COLUMN message               TEXT     NULL,
+    DROP COLUMN IF EXISTS existing_website,
+    DROP COLUMN IF EXISTS existing_website_url,
+    DROP COLUMN IF EXISTS site_goal,
+    DROP COLUMN IF EXISTS pages_needed,
+    DROP COLUMN IF EXISTS style_direction,
+    DROP COLUMN IF EXISTS has_logo,
+    DROP COLUMN IF EXISTS logo_url,
+    DROP COLUMN IF EXISTS has_brand_colors,
+    DROP COLUMN IF EXISTS primary_color,
+    DROP COLUMN IF EXISTS secondary_color,
+    DROP COLUMN IF EXISTS inspiration_urls,
+    DROP COLUMN IF EXISTS phone_number,
+    DROP COLUMN IF EXISTS contact_method,
+    DROP COLUMN IF EXISTS timeline;

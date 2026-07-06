@@ -1,0 +1,16 @@
+ALTER TABLE leads
+    DROP COLUMN IF EXISTS message,
+    ADD COLUMN existing_website      BOOLEAN  NULL,
+    ADD COLUMN existing_website_url  TEXT     NULL,
+    ADD COLUMN site_goal             TEXT     NULL,
+    ADD COLUMN pages_needed          TEXT[]   NULL,
+    ADD COLUMN style_direction       TEXT     NULL,
+    ADD COLUMN has_logo              BOOLEAN  NULL,
+    ADD COLUMN logo_url              TEXT     NULL,
+    ADD COLUMN has_brand_colors      BOOLEAN  NULL,
+    ADD COLUMN primary_color         TEXT     NULL,
+    ADD COLUMN secondary_color       TEXT     NULL,
+    ADD COLUMN inspiration_urls      TEXT[]   NULL,
+    ADD COLUMN phone_number          TEXT     NULL,
+    ADD COLUMN contact_method        TEXT     NULL,
+    ADD COLUMN timeline              TEXT     NULL;
