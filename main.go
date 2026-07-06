@@ -41,9 +41,6 @@ func main() {
 	})
 
 	emailClient := email.NewEmailClient()
-	if emailClient == nil {
-		slog.Warn("Lead email notifications disabled — set RESEND_API_KEY, RESEND_FROM and LEAD_NOTIFICATION_EMAIL to enable")
-	}
 
 	leadRepo := repository.NewLeadRepository(pool)
 	var notifier service.LeadNotifier
@@ -61,6 +58,7 @@ func main() {
 	protected.Use(middleware.RequireUserID())
 	{
 		protected.POST("/agency/leads", leadHandler.CreateLead)
+		protected.GET("/agency/leads/mine", leadHandler.GetUserLeads)
 		protected.GET("/agency/leads/:id/milestones", milestoneHandler.GetMilestones)
 
 		admin := protected.Group("/")
@@ -68,6 +66,7 @@ func main() {
 		{
 			admin.GET("/agency/leads", leadHandler.GetLeads)
 			admin.PATCH("/agency/leads/:id/status", leadHandler.UpdateLeadStatus)
+			admin.PATCH("/agency/leads/:id/milestone", leadHandler.UpdateLeadMilestone)
 			admin.POST("/agency/leads/:id/milestones", milestoneHandler.CreateMilestone)
 			admin.PATCH("/agency/milestones/:id", milestoneHandler.UpdateMilestone)
 			admin.DELETE("/agency/milestones/:id", milestoneHandler.DeleteMilestone)

@@ -14,6 +14,7 @@ import (
 type LeadNotifier interface {
 	SendNewLeadNotification(lead model.Lead) error
 	SendLeadConfirmation(lead model.Lead) error
+	SendLeadAccepted(lead model.Lead) error
 }
 
 var ErrActiveLeadExists = errors.New("you already have an active lead; a new one can be submitted once the current lead is completed")
@@ -75,9 +76,43 @@ func (s *LeadService) GetLeads(ctx context.Context, page, limit int) ([]model.Le
 	return leads, total, nil
 }
 
+func (s *LeadService) GetUserLeads(ctx context.Context, userID string) ([]model.Lead, error) {
+	return s.leadRepo.GetLeadsByUserID(ctx, userID)
+}
+
 func (s *LeadService) UpdateLeadStatus(ctx context.Context, id string, status string) error {
-	if status != "pending" && status != "completed" {
-		return errors.New("status must be 'pending' or 'completed'")
+	if status != "pending" && status != "accepted" && status != "completed" {
+		return errors.New("status must be 'pending', 'accepted', or 'completed'")
 	}
 	return s.leadRepo.UpdateLeadStatus(ctx, id, status)
+}
+
+func (s *LeadService) UpdateLeadMilestone(ctx context.Context, id string, milestoneIndex int) error {
+	if milestoneIndex < 0 || milestoneIndex > 4 {
+		return errors.New("milestone_index must be between 0 and 4")
+	}
+
+	// Detect pending→accepted transition to send acceptance email.
+	var lead *model.Lead
+	if milestoneIndex == 0 && s.notifier != nil {
+		var err error
+		lead, err = s.leadRepo.GetLeadByID(ctx, id)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := s.leadRepo.UpdateLeadMilestone(ctx, id, milestoneIndex); err != nil {
+		return err
+	}
+
+	if lead != nil && lead.Status == "pending" {
+		go func(l model.Lead) {
+			if err := s.notifier.SendLeadAccepted(l); err != nil {
+				slog.Error("Failed to send lead accepted email", "lead_id", l.ID, "error", err)
+			}
+		}(*lead)
+	}
+
+	return nil
 }

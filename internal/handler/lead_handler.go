@@ -107,6 +107,18 @@ func (h *LeadHandler) GetLeads(c *gin.Context) {
 	})
 }
 
+func (h *LeadHandler) GetUserLeads(c *gin.Context) {
+	userID, _ := c.Get(middleware.ContextUserID)
+
+	leads, err := h.leadService.GetUserLeads(c.Request.Context(), userID.(string))
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	respondOK(c, leads)
+}
+
 type UpdateStatusRequest struct {
 	Status string `json:"status" binding:"required"`
 }
@@ -126,4 +138,25 @@ func (h *LeadHandler) UpdateLeadStatus(c *gin.Context) {
 	}
 
 	respondOK(c, gin.H{"message": "status updated"})
+}
+
+type UpdateLeadMilestoneRequest struct {
+	MilestoneIndex int `json:"milestone_index"`
+}
+
+func (h *LeadHandler) UpdateLeadMilestone(c *gin.Context) {
+	id := c.Param("id")
+
+	var req UpdateLeadMilestoneRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+
+	if err := h.leadService.UpdateLeadMilestone(c.Request.Context(), id, req.MilestoneIndex); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"message": "milestone updated"})
 }
