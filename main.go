@@ -41,6 +41,11 @@ func main() {
 	})
 
 	emailClient := email.NewEmailClient()
+	if emailClient != nil {
+		slog.Info("Email notifications enabled", "from", os.Getenv("RESEND_FROM"))
+	} else {
+		slog.Warn("Email notifications DISABLED — set RESEND_API_KEY and RESEND_FROM in .env to enable")
+	}
 
 	leadRepo := repository.NewLeadRepository(pool)
 	var notifier service.LeadNotifier
@@ -60,6 +65,9 @@ func main() {
 		protected.POST("/agency/leads", leadHandler.CreateLead)
 		protected.GET("/agency/leads/mine", leadHandler.GetUserLeads)
 		protected.GET("/agency/leads/:id/milestones", milestoneHandler.GetMilestones)
+		protected.POST("/agency/leads/:id/review", leadHandler.SubmitReview)
+		protected.PATCH("/agency/leads/:id/maintenance", leadHandler.SetWantsMaintenance)
+		protected.POST("/agency/leads/:id/pay", leadHandler.MarkPaid)
 
 		admin := protected.Group("/")
 		admin.Use(middleware.RequireAdminRole())
@@ -67,6 +75,9 @@ func main() {
 			admin.GET("/agency/leads", leadHandler.GetLeads)
 			admin.PATCH("/agency/leads/:id/status", leadHandler.UpdateLeadStatus)
 			admin.PATCH("/agency/leads/:id/milestone", leadHandler.UpdateLeadMilestone)
+			admin.PATCH("/agency/leads/:id/mockup", leadHandler.SetMockupURL)
+			admin.PATCH("/agency/leads/:id/complete", leadHandler.CompleteSite)
+			admin.PATCH("/agency/leads/:id/launch", leadHandler.LaunchSite)
 			admin.POST("/agency/leads/:id/milestones", milestoneHandler.CreateMilestone)
 			admin.PATCH("/agency/milestones/:id", milestoneHandler.UpdateMilestone)
 			admin.DELETE("/agency/milestones/:id", milestoneHandler.DeleteMilestone)

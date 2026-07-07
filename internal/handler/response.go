@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,11 @@ func respondCreated(c *gin.Context, data interface{}) {
 }
 
 func respondError(c *gin.Context, status int, code, message string) {
+	// Never leak internal details (DB errors, stack info) to clients.
+	if status >= http.StatusInternalServerError {
+		slog.Error("request failed", "code", code, "error", message, "method", c.Request.Method, "path", c.Request.URL.Path)
+		message = "an internal error occurred"
+	}
 	c.JSON(status, APIResponse{
 		Success: false,
 		Error:   &ErrorDetail{Code: code, Message: message},

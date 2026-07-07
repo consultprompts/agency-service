@@ -23,7 +23,15 @@ type Lead struct {
 	ContactMethod      *string   `json:"contact_method,omitempty"`
 	Timeline           *string   `json:"timeline,omitempty"`
 	Package            *string   `json:"package,omitempty"`
-	Status             string    `json:"status"`
-	MilestoneIndex     int       `json:"milestone_index"`
-	CreatedAt          time.Time `json:"created_at"`
+	Status             string     `json:"status"`
+	MilestoneIndex     int        `json:"milestone_index"`
+	MockupURL          *string    `json:"mockup_url,omitempty"`
+	RevisionFeedback   *string    `json:"revision_feedback,omitempty"`
+	WantsMaintenance   bool       `json:"wants_maintenance"`
+	IsPaid             bool       `json:"is_paid"`
+	PaidAt             *time.Time `json:"paid_at,omitempty"`
+	PaymentAmount      *float64   `json:"payment_amount,omitempty"`
+	SiteURL            *string    `json:"site_url,omitempty"`
+	DomainRenewalDate  *time.Time `json:"domain_renewal_date,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
 }

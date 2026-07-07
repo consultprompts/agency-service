@@ -21,7 +21,10 @@ const leadColumns = `
 	site_goal, pages_needed, style_direction,
 	has_logo, logo_url, has_brand_colors, primary_color, secondary_color,
 	inspiration_urls, phone_number, contact_method, timeline,
-	package, status, milestone_index, created_at`
+	package, status, milestone_index, created_at,
+	mockup_url, revision_feedback, wants_maintenance,
+	is_paid, paid_at, payment_amount, site_url, domain_renewal_date
+`
 
 func scanLead(row interface {
 	Scan(...any) error
@@ -50,6 +53,14 @@ func scanLead(row interface {
 		&lead.Status,
 		&lead.MilestoneIndex,
 		&lead.CreatedAt,
+		&lead.MockupURL,
+		&lead.RevisionFeedback,
+		&lead.WantsMaintenance,
+		&lead.IsPaid,
+		&lead.PaidAt,
+		&lead.PaymentAmount,
+		&lead.SiteURL,
+		&lead.DomainRenewalDate,
 	)
 }
 
@@ -142,7 +153,7 @@ func (repo *LeadRepository) CountLeads(ctx context.Context) (int, error) {
 func (repo *LeadRepository) HasActiveLead(ctx context.Context, userID string) (bool, error) {
 	var count int
 	err := repo.db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM leads WHERE user_id = $1 AND status != 'completed'`,
+		`SELECT COUNT(*) FROM leads WHERE user_id = $1 AND status NOT IN ('completed', 'launched')`,
 		userID,
 	).Scan(&count)
 	return count > 0, err
@@ -175,14 +186,41 @@ func (repo *LeadRepository) UpdateLeadStatus(ctx context.Context, id string, sta
 }
 
 func (repo *LeadRepository) UpdateLeadMilestone(ctx context.Context, id string, milestoneIndex int) error {
-	const milestoneCount = 5
-	status := "accepted"
-	if milestoneIndex >= milestoneCount-1 {
-		status = "completed"
-	}
+	// Never regress status from 'launched' — that can only be set by SetLaunched.
 	_, err := repo.db.Exec(ctx,
-		`UPDATE leads SET milestone_index = $1, status = $2 WHERE id = $3`,
-		milestoneIndex, status, id,
+		`UPDATE leads SET milestone_index = $1, status = 'accepted' WHERE id = $2 AND status != 'launched'`,
+		milestoneIndex, id,
 	)
+	return err
+}
+
+func (repo *LeadRepository) MarkPaid(ctx context.Context, id string, amount int) error {
+	_, err := repo.db.Exec(ctx,
+		`UPDATE leads SET is_paid = true, paid_at = NOW(), payment_amount = $1, domain_renewal_date = NOW() + INTERVAL '1 year' WHERE id = $2`,
+		amount, id,
+	)
+	return err
+}
+
+func (repo *LeadRepository) SetLaunched(ctx context.Context, id, siteURL string) error {
+	_, err := repo.db.Exec(ctx,
+		`UPDATE leads SET milestone_index = 5, status = 'launched', site_url = $1 WHERE id = $2`,
+		siteURL, id,
+	)
+	return err
+}
+
+func (repo *LeadRepository) SetMockupURL(ctx context.Context, id, url string) error {
+	_, err := repo.db.Exec(ctx, `UPDATE leads SET mockup_url = $1 WHERE id = $2`, url, id)
+	return err
+}
+
+func (repo *LeadRepository) SetRevisionFeedback(ctx context.Context, id, feedback string) error {
+	_, err := repo.db.Exec(ctx, `UPDATE leads SET revision_feedback = $1 WHERE id = $2`, feedback, id)
+	return err
+}
+
+func (repo *LeadRepository) SetWantsMaintenance(ctx context.Context, id string, wants bool) error {
+	_, err := repo.db.Exec(ctx, `UPDATE leads SET wants_maintenance = $1 WHERE id = $2`, wants, id)
 	return err
 }

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 
@@ -16,6 +18,13 @@ import (
 
 type LeadHandler struct {
 	leadService *service.LeadService
+}
+
+// isValidHTTPURL rejects anything that isn't an absolute http(s) URL, so
+// stored URLs can never smuggle javascript:/data: into client-rendered links.
+func isValidHTTPURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 func NewLeadHandler(leadService *service.LeadService) *LeadHandler {
@@ -56,6 +65,17 @@ func (h *LeadHandler) CreateLead(c *gin.Context) {
 	} else {
 		if err := c.ShouldBindJSON(&req); err != nil {
 			respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+			return
+		}
+	}
+
+	if req.ExistingWebsiteURL != nil && *req.ExistingWebsiteURL != "" && !isValidHTTPURL(*req.ExistingWebsiteURL) {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", "existing_website_url must be a valid http(s) URL")
+		return
+	}
+	for _, u := range req.InspirationURLs {
+		if u != "" && !isValidHTTPURL(u) {
+			respondError(c, http.StatusBadRequest, "INVALID_INPUT", "inspiration_urls must be valid http(s) URLs")
 			return
 		}
 	}
@@ -193,4 +213,143 @@ func (h *LeadHandler) UpdateLeadMilestone(c *gin.Context) {
 	}
 
 	respondOK(c, gin.H{"message": "milestone updated"})
+}
+
+type SetMockupURLRequest struct {
+	MockupURL string `json:"mockup_url" binding:"required"`
+}
+
+func (h *LeadHandler) SetMockupURL(c *gin.Context) {
+	id := c.Param("id")
+
+	var req SetMockupURLRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+	if !isValidHTTPURL(req.MockupURL) {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", "mockup_url must be a valid http(s) URL")
+		return
+	}
+
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if err := h.leadService.SetMockupURL(c.Request.Context(), id, req.MockupURL, frontendURL); err != nil {
+		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"message": "mockup URL saved"})
+}
+
+type SubmitReviewRequest struct {
+	Decision string `json:"decision" binding:"required"`
+	Feedback string `json:"feedback"`
+}
+
+func (h *LeadHandler) SubmitReview(c *gin.Context) {
+	id := c.Param("id")
+	userID, _ := c.Get(middleware.ContextUserID)
+
+	var req SubmitReviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+
+	err := h.leadService.SubmitReview(c.Request.Context(), id, userID.(string), req.Decision, req.Feedback)
+	if err != nil {
+		if err.Error() == "forbidden" {
+			respondError(c, http.StatusForbidden, "FORBIDDEN", "you do not own this lead")
+			return
+		}
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"message": "review submitted"})
+}
+
+func (h *LeadHandler) CompleteSite(c *gin.Context) {
+	id := c.Param("id")
+
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if err := h.leadService.CompleteSite(c.Request.Context(), id, frontendURL); err != nil {
+		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"message": "site marked complete"})
+}
+
+type SetMaintenanceRequest struct {
+	WantsMaintenance bool `json:"wants_maintenance"`
+}
+
+func (h *LeadHandler) SetWantsMaintenance(c *gin.Context) {
+	id := c.Param("id")
+	userID, _ := c.Get(middleware.ContextUserID)
+
+	var req SetMaintenanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+
+	err := h.leadService.SetWantsMaintenance(c.Request.Context(), id, userID.(string), req.WantsMaintenance)
+	if err != nil {
+		if err.Error() == "forbidden" {
+			respondError(c, http.StatusForbidden, "FORBIDDEN", "you do not own this lead")
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"message": "maintenance preference saved"})
+}
+
+func (h *LeadHandler) MarkPaid(c *gin.Context) {
+	id := c.Param("id")
+	userID, _ := c.Get(middleware.ContextUserID)
+
+	err := h.leadService.MarkPaid(c.Request.Context(), id, userID.(string))
+	if err != nil {
+		if err.Error() == "forbidden" {
+			respondError(c, http.StatusForbidden, "FORBIDDEN", "you do not own this lead")
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"message": "payment recorded"})
+}
+
+type LaunchSiteRequest struct {
+	SiteURL string `json:"site_url" binding:"required"`
+}
+
+func (h *LeadHandler) LaunchSite(c *gin.Context) {
+	id := c.Param("id")
+
+	var req LaunchSiteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+	if !isValidHTTPURL(req.SiteURL) {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", "site_url must be a valid http(s) URL")
+		return
+	}
+
+	if err := h.leadService.LaunchSite(c.Request.Context(), id, req.SiteURL); err != nil {
+		if err.Error() == "payment required before launch" {
+			respondError(c, http.StatusConflict, "PAYMENT_REQUIRED", err.Error())
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"message": "site launched"})
 }
