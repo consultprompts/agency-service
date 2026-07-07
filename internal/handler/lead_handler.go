@@ -35,6 +35,7 @@ type CreateLeadRequest struct {
 	Name               string   `json:"name"                form:"name"                binding:"required"`
 	Email              string   `json:"email"               form:"email"               binding:"required,email"`
 	Business           string   `json:"business"            form:"business"            binding:"required"`
+	Message            *string  `json:"message"             form:"message"`
 	ExistingWebsite    *bool    `json:"existing_website"    form:"existing_website"`
 	ExistingWebsiteURL *string  `json:"existing_website_url" form:"existing_website_url"`
 	SiteGoal           *string  `json:"site_goal"           form:"site_goal"`
@@ -49,6 +50,7 @@ type CreateLeadRequest struct {
 	ContactMethod      *string  `json:"contact_method"      form:"contact_method"`
 	Timeline           *string  `json:"timeline"            form:"timeline"`
 	Package            *string  `json:"package"             form:"package"`
+	WantsCall          bool     `json:"wants_call"          form:"wants_call"`
 }
 
 func (h *LeadHandler) CreateLead(c *gin.Context) {
@@ -84,6 +86,7 @@ func (h *LeadHandler) CreateLead(c *gin.Context) {
 		Name:               req.Name,
 		Email:              req.Email,
 		Business:           req.Business,
+		Message:            req.Message,
 		ExistingWebsite:    req.ExistingWebsite,
 		ExistingWebsiteURL: req.ExistingWebsiteURL,
 		SiteGoal:           req.SiteGoal,
@@ -98,6 +101,7 @@ func (h *LeadHandler) CreateLead(c *gin.Context) {
 		ContactMethod:      req.ContactMethod,
 		Timeline:           req.Timeline,
 		Package:            req.Package,
+		WantsCall:          req.WantsCall,
 	}
 
 	created, err := h.leadService.CreateLead(c.Request.Context(), userID.(string), lead)
@@ -171,27 +175,6 @@ func (h *LeadHandler) GetUserLeads(c *gin.Context) {
 	}
 
 	respondOK(c, leads)
-}
-
-type UpdateStatusRequest struct {
-	Status string `json:"status" binding:"required"`
-}
-
-func (h *LeadHandler) UpdateLeadStatus(c *gin.Context) {
-	id := c.Param("id")
-
-	var req UpdateStatusRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
-		return
-	}
-
-	if err := h.leadService.UpdateLeadStatus(c.Request.Context(), id, req.Status); err != nil {
-		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
-		return
-	}
-
-	respondOK(c, gin.H{"message": "status updated"})
 }
 
 type UpdateLeadMilestoneRequest struct {

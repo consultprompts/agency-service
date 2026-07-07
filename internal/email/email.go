@@ -43,6 +43,7 @@ func (c *Client) SendNewLeadNotification(lead model.Lead) error {
 		Email:     lead.Email,
 		Business:  lead.Business,
 		Package:   lead.Package,
+		Message:   lead.Message,
 		CreatedAt: lead.CreatedAt,
 	})
 }
@@ -122,6 +123,32 @@ func (c *Client) SendRevisionRequestEmail(clientEmail, businessName, feedback st
 	})
 	if err != nil {
 		slog.Error("Failed to send revision request email", "business", businessName, "error", err)
+	}
+	return err
+}
+
+// SendRevisionRequestConfirmationEmail confirms to the client that their revision
+// request was received and a new mockup is on the way.
+func (c *Client) SendRevisionRequestConfirmationEmail(to, businessName string) error {
+	body := fmt.Sprintf(`
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:24px;"><tr>
+      <td width="56" height="56" style="width:56px; height:56px; background:rgba(245,197,66,0.1); border-radius:28px; text-align:center; vertical-align:middle;">
+        <span style="font-size:22px; line-height:56px; display:block;">&#9989;</span>
+      </td>
+    </tr></table>
+    <h2 style="margin:0 0 10px; font-family:'Space Grotesk',Georgia,serif; font-style:italic; font-size:26px; font-weight:700; letter-spacing:-0.02em; color:#ffffff;">Revision Request Received</h2>
+    <p style="margin:0 0 30px; color:#A1A1A1; font-size:14px; font-weight:300; line-height:1.7;">We've received your requested changes for <strong style="color:#ffffff;">%s</strong>. We'll get to work on an updated mockup and let you know as soon as it's ready to review.</p>
+    <p style="margin:0; font-size:12px; color:#555555; line-height:1.6;">Have questions? Just reply to this email — we read every one.</p>
+`, html.EscapeString(businessName))
+
+	_, err := c.resend.Emails.Send(&resend.SendEmailRequest{
+		From:    c.from,
+		To:      []string{to},
+		Subject: "We've received your revision request — consultprompts.com",
+		Html:    openEmail() + body + closeEmail(),
+	})
+	if err != nil {
+		slog.Error("Failed to send revision request confirmation email", "to", to, "error", err)
 	}
 	return err
 }

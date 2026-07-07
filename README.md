@@ -1,22 +1,30 @@
 # Agency Service — consultprompts.com
 
 Manages B2B client leads for custom web design / agency work. Owns mockup
-requests submitted through the site and their status (pending/completed).
+requests submitted through the site and the full project workflow — milestones,
+mockup review, payment, and launch.
 Sits behind the API Gateway — never exposed directly to the internet.
 
 ---
 
 ## What this service owns
 
-- Lead capture — name, email, business, message, selected package
-- Lead status tracking (`pending` / `completed`)
-- Email notification to the site owner when a new lead is submitted
-  (via Resend; optional — disabled when the env vars aren't set)
-- Milestone tracking for custom website builds — admins create/update/delete
-  milestones on a lead; the lead's submitter can view their own project's
-  milestones (`pending` / `in_progress` / `completed`)
-- Nothing else yet (onboarding questionnaires and full project management
-  are future additions per the original architecture plan)
+- Lead capture — name, email, business, selected package, and the project
+  brief (goals, pages, branding, timeline, …)
+- Lead status tracking (`pending` / `accepted` / `completed` / `launched`)
+- Project milestone tracking as a single `milestone_index` int per lead,
+  walking a fixed stage list shared with the frontend
+  (`website/src/lib/milestones.ts` ↔ the `core*` constants in
+  `lead_service.go`): Designing Your Website → Design Ready for Your Review
+  → Design Approved → Building Your Website → Website Ready → Payment →
+  Waiting for Launch → Website Is Live, optionally preceded by Discovery
+  Call Completed when the lead requested a call
+- The client-facing project workflow: mockup delivery & review
+  (accept / request changes), site completion, payment recording, and launch
+- Email notifications via Resend (optional — disabled when the env vars
+  aren't set): new-lead alerts to the site owner, plus client emails for
+  acceptance, mockup delivery, revision requests, payment requests,
+  receipts, and launch
 
 ## What this service does NOT do
 
@@ -77,16 +85,12 @@ agency-service/
     handler/
       response.go                # standardized {success, data, error} response helpers
       lead_handler.go             # HTTP handlers for lead endpoints
-      milestone_handler.go        # HTTP handlers for milestone endpoints
     service/
-      lead_service.go             # business logic, status validation, notification trigger
-      milestone_service.go        # milestone logic, ownership checks
+      lead_service.go             # business logic, milestone flow, notification triggers
     repository/
       lead_repository.go          # SQL queries (pgx)
-      milestone_repository.go
     model/
       lead.go                     # Lead struct
-      milestone.go                # Milestone struct
     middleware/
       trusted_headers.go          # RequireUserID, RequireAdminRole, IsAdmin
     email/
@@ -105,8 +109,7 @@ agency-service/
 
 | Table | Description |
 |-------|-------------|
-| `leads` | id, user_id, name, email, business, message (nullable), package (nullable), status, created_at |
-| `milestones` | id, lead_id (FK → leads, cascade delete), title, description (nullable), status, sort_order, due_date (nullable), completed_at (nullable, set automatically on status transitions), created_at |
+| `leads` | id, user_id, name, email, business, message, package, status, milestone_index, wants_call, project-brief fields (site_goal, pages_needed, branding, timeline, …), workflow fields (mockup_url, revision_feedback, site_url), payment fields (is_paid, paid_at, payment_amount, wants_maintenance, domain_renewal_date), created_at |
 
 ---
 
@@ -116,12 +119,15 @@ agency-service/
 |--------|------|---------------|-------------|
 | GET | /healthz | No | Health check with DB connectivity verification |
 | POST | /agency/leads | Yes (any authenticated user) | Submit a mockup request |
+| GET | /agency/leads/mine | Yes (any authenticated user) | List the caller's own leads |
+| POST | /agency/leads/:id/review | Yes (lead owner) | Accept the mockup or request changes |
+| PATCH | /agency/leads/:id/maintenance | Yes (lead owner) | Toggle the monthly-maintenance preference |
+| POST | /agency/leads/:id/pay | Yes (lead owner) | Record payment; advances milestone to Waiting for Launch |
 | GET | /agency/leads | Yes (admin only) | List all leads |
-| PATCH | /agency/leads/:id/status | Yes (admin only) | Update lead status |
-| GET | /agency/leads/:id/milestones | Yes (lead owner or admin) | List a lead's milestones |
-| POST | /agency/leads/:id/milestones | Yes (admin only) | Create a milestone on a lead |
-| PATCH | /agency/milestones/:id | Yes (admin only) | Partially update a milestone (title, description, status, sort_order, due_date) |
-| DELETE | /agency/milestones/:id | Yes (admin only) | Delete a milestone |
+| PATCH | /agency/leads/:id/milestone | Yes (admin only) | Set a lead's milestone_index |
+| PATCH | /agency/leads/:id/mockup | Yes (admin only) | Save the mockup URL and notify the client to review |
+| PATCH | /agency/leads/:id/complete | Yes (admin only) | Mark the site ready and email the client to pay |
+| PATCH | /agency/leads/:id/launch | Yes (admin only) | Set the live site URL and mark the lead launched (requires payment) |
 
 All routes except `/healthz` require the request to have passed through
 the API Gateway's JWT verification — this service reads `X-User-ID` and

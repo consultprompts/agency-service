@@ -11,11 +11,14 @@ import (
 	"github.com/consultprompts/agency-service/internal/middleware"
 	"github.com/consultprompts/agency-service/internal/repository"
 	"github.com/consultprompts/agency-service/internal/service"
+	"github.com/consultprompts/agency-service/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
 func main() {
+	logger.Init()
+
 	if err := godotenv.Load(); err != nil {
 		slog.Warn("No .env file found, using existing environment variables")
 	}
@@ -31,6 +34,7 @@ func main() {
 
 	router := gin.New()
 	router.SetTrustedProxies(nil)
+	router.Use(middleware.RequestLogger())
 
 	router.GET("/healthz", func(c *gin.Context) {
 		if err := pool.Ping(c.Request.Context()); err != nil {
@@ -55,16 +59,11 @@ func main() {
 	leadService := service.NewLeadService(leadRepo, notifier)
 	leadHandler := handler.NewLeadHandler(leadService)
 
-	milestoneRepo := repository.NewMilestoneRepository(pool)
-	milestoneService := service.NewMilestoneService(milestoneRepo, leadRepo)
-	milestoneHandler := handler.NewMilestoneHandler(milestoneService)
-
 	protected := router.Group("/")
 	protected.Use(middleware.RequireUserID())
 	{
 		protected.POST("/agency/leads", leadHandler.CreateLead)
 		protected.GET("/agency/leads/mine", leadHandler.GetUserLeads)
-		protected.GET("/agency/leads/:id/milestones", milestoneHandler.GetMilestones)
 		protected.POST("/agency/leads/:id/review", leadHandler.SubmitReview)
 		protected.PATCH("/agency/leads/:id/maintenance", leadHandler.SetWantsMaintenance)
 		protected.POST("/agency/leads/:id/pay", leadHandler.MarkPaid)
@@ -73,14 +72,10 @@ func main() {
 		admin.Use(middleware.RequireAdminRole())
 		{
 			admin.GET("/agency/leads", leadHandler.GetLeads)
-			admin.PATCH("/agency/leads/:id/status", leadHandler.UpdateLeadStatus)
 			admin.PATCH("/agency/leads/:id/milestone", leadHandler.UpdateLeadMilestone)
 			admin.PATCH("/agency/leads/:id/mockup", leadHandler.SetMockupURL)
 			admin.PATCH("/agency/leads/:id/complete", leadHandler.CompleteSite)
 			admin.PATCH("/agency/leads/:id/launch", leadHandler.LaunchSite)
-			admin.POST("/agency/leads/:id/milestones", milestoneHandler.CreateMilestone)
-			admin.PATCH("/agency/milestones/:id", milestoneHandler.UpdateMilestone)
-			admin.DELETE("/agency/milestones/:id", milestoneHandler.DeleteMilestone)
 		}
 	}
 

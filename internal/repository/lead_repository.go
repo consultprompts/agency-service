@@ -16,12 +16,12 @@ func NewLeadRepository(db *pgxpool.Pool) *LeadRepository {
 }
 
 const leadColumns = `
-	id, user_id, name, email, business,
+	id, user_id, name, email, business, message,
 	existing_website, existing_website_url,
 	site_goal, pages_needed, style_direction,
 	has_logo, logo_url, has_brand_colors, primary_color, secondary_color,
 	inspiration_urls, phone_number, contact_method, timeline,
-	package, status, milestone_index, created_at,
+	package, wants_call, status, milestone_index, created_at,
 	mockup_url, revision_feedback, wants_maintenance,
 	is_paid, paid_at, payment_amount, site_url, domain_renewal_date
 `
@@ -35,6 +35,7 @@ func scanLead(row interface {
 		&lead.Name,
 		&lead.Email,
 		&lead.Business,
+		&lead.Message,
 		&lead.ExistingWebsite,
 		&lead.ExistingWebsiteURL,
 		&lead.SiteGoal,
@@ -50,6 +51,7 @@ func scanLead(row interface {
 		&lead.ContactMethod,
 		&lead.Timeline,
 		&lead.Package,
+		&lead.WantsCall,
 		&lead.Status,
 		&lead.MilestoneIndex,
 		&lead.CreatedAt,
@@ -67,19 +69,19 @@ func scanLead(row interface {
 func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*model.Lead, error) {
 	query := `
 		INSERT INTO leads (
-			user_id, name, email, business,
+			user_id, name, email, business, message,
 			existing_website, existing_website_url,
 			site_goal, pages_needed, style_direction,
 			has_logo, logo_url, has_brand_colors, primary_color, secondary_color,
 			inspiration_urls, phone_number, contact_method, timeline,
-			package
+			package, wants_call
 		) VALUES (
-			$1, $2, $3, $4,
-			$5, $6,
-			$7, $8, $9,
-			$10, $11, $12, $13, $14,
-			$15, $16, $17, $18,
-			$19
+			$1, $2, $3, $4, $5,
+			$6, $7,
+			$8, $9, $10,
+			$11, $12, $13, $14, $15,
+			$16, $17, $18, $19,
+			$20, $21
 		)
 		RETURNING id, status, milestone_index, created_at
 	`
@@ -89,6 +91,7 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 		lead.Name,
 		lead.Email,
 		lead.Business,
+		lead.Message,
 		lead.ExistingWebsite,
 		lead.ExistingWebsiteURL,
 		lead.SiteGoal,
@@ -104,6 +107,7 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 		lead.ContactMethod,
 		lead.Timeline,
 		lead.Package,
+		lead.WantsCall,
 	).Scan(&lead.ID, &lead.Status, &lead.MilestoneIndex, &lead.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -180,11 +184,6 @@ func (repo *LeadRepository) GetLeadsByUserID(ctx context.Context, userID string)
 	return leads, nil
 }
 
-func (repo *LeadRepository) UpdateLeadStatus(ctx context.Context, id string, status string) error {
-	_, err := repo.db.Exec(ctx, `UPDATE leads SET status = $1 WHERE id = $2`, status, id)
-	return err
-}
-
 func (repo *LeadRepository) UpdateLeadMilestone(ctx context.Context, id string, milestoneIndex int) error {
 	// Never regress status from 'launched' — that can only be set by SetLaunched.
 	_, err := repo.db.Exec(ctx,
@@ -202,16 +201,18 @@ func (repo *LeadRepository) MarkPaid(ctx context.Context, id string, amount int)
 	return err
 }
 
-func (repo *LeadRepository) SetLaunched(ctx context.Context, id, siteURL string) error {
+func (repo *LeadRepository) SetLaunched(ctx context.Context, id, siteURL string, milestoneIndex int) error {
 	_, err := repo.db.Exec(ctx,
-		`UPDATE leads SET milestone_index = 5, status = 'launched', site_url = $1 WHERE id = $2`,
-		siteURL, id,
+		`UPDATE leads SET milestone_index = $1, status = 'launched', site_url = $2 WHERE id = $3`,
+		milestoneIndex, siteURL, id,
 	)
 	return err
 }
 
 func (repo *LeadRepository) SetMockupURL(ctx context.Context, id, url string) error {
-	_, err := repo.db.Exec(ctx, `UPDATE leads SET mockup_url = $1 WHERE id = $2`, url, id)
+	// Clear any prior revision feedback — a fresh mockup means the client's
+	// last request for changes has been addressed.
+	_, err := repo.db.Exec(ctx, `UPDATE leads SET mockup_url = $1, revision_feedback = NULL WHERE id = $2`, url, id)
 	return err
 }
 

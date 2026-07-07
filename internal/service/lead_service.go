@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/consultprompts/agency-service/internal/model"
@@ -17,6 +18,7 @@ type LeadNotifier interface {
 	SendLeadAccepted(lead model.Lead) error
 	SendMockupReadyEmail(to, projectLink string) error
 	SendRevisionRequestEmail(clientEmail, businessName, feedback string) error
+	SendRevisionRequestConfirmationEmail(to, businessName string) error
 	SendPaymentRequestEmail(to, projectLink string) error
 	SendSiteLaunchedEmail(to, siteURL, businessName string) error
 	SendPaymentReceiptEmail(to, businessName, packageName string, packagePrice, totalAmount int, wantsMaintenance bool, domainRenewalDate string) error
@@ -103,35 +105,54 @@ func (s *LeadService) GetUserLeads(ctx context.Context, userID string) ([]model.
 	return s.leadRepo.GetLeadsByUserID(ctx, userID)
 }
 
-func (s *LeadService) UpdateLeadStatus(ctx context.Context, id string, status string) error {
-	switch status {
-	case "pending", "accepted", "completed", "launched":
-	default:
-		return errors.New("status must be 'pending', 'accepted', 'completed', or 'launched'")
+// milestoneOffset accounts for the optional "Discovery Call Completed" stage
+// that precedes the core flow when a lead opted into a 15-minute call.
+func milestoneOffset(l model.Lead) int {
+	if l.WantsCall {
+		return 1
 	}
-	return s.leadRepo.UpdateLeadStatus(ctx, id, status)
+	return 0
 }
 
+// Core milestone stage indices, relative to milestoneOffset(lead).
+const (
+	coreDesigningMockup    = 0
+	coreMockupDelivered    = 1
+	coreRevisionsSignedOff = 2
+	coreSiteInDevelopment  = 3
+	coreSiteCompleted      = 4
+	corePayment            = 5
+	coreWaitingForLaunch   = 6
+	coreLaunched           = 7
+)
+
 func (s *LeadService) UpdateLeadMilestone(ctx context.Context, id string, milestoneIndex int) error {
-	if milestoneIndex < 0 || milestoneIndex > 5 {
-		return errors.New("milestone_index must be between 0 and 5")
+	lead, err := s.leadRepo.GetLeadByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	offset := milestoneOffset(*lead)
+
+	if milestoneIndex < 0 || milestoneIndex > offset+coreLaunched {
+		return fmt.Errorf("milestone_index must be between 0 and %d", offset+coreLaunched)
+	}
+	if milestoneIndex == offset+coreRevisionsSignedOff {
+		return errors.New("Design Approved is set automatically when the client accepts their mockup")
+	}
+	if milestoneIndex == offset+corePayment {
+		return errors.New("Payment is set automatically when the admin marks the site ready")
+	}
+	if milestoneIndex == offset+coreWaitingForLaunch {
+		return errors.New("Waiting for Launch is set automatically when the client pays")
 	}
 
-	// Detect pending→accepted transition to send acceptance email.
-	var lead *model.Lead
-	if milestoneIndex == 0 && s.notifier != nil {
-		var err error
-		lead, err = s.leadRepo.GetLeadByID(ctx, id)
-		if err != nil {
-			return err
-		}
-	}
+	wasPending := lead.Status == "pending"
 
 	if err := s.leadRepo.UpdateLeadMilestone(ctx, id, milestoneIndex); err != nil {
 		return err
 	}
 
-	if lead != nil && lead.Status == "pending" {
+	if milestoneIndex == 0 && wasPending && s.notifier != nil {
 		go func(l model.Lead) {
 			if err := s.notifier.SendLeadAccepted(l); err != nil {
 				slog.Error("Failed to send lead accepted email", "lead_id", l.ID, "error", err)
@@ -142,8 +163,9 @@ func (s *LeadService) UpdateLeadMilestone(ctx context.Context, id string, milest
 	return nil
 }
 
-// SetMockupURL saves the mockup URL, advances the milestone to "Mockup Delivered" (index 1),
-// and emails the client a link to their project page.
+// SetMockupURL saves the mockup URL and advances the milestone to "Design Ready
+// for Your Review" (index 1), where the client will approve it or request
+// changes, then emails the client a link to their project page.
 func (s *LeadService) SetMockupURL(ctx context.Context, id, url, frontendURL string) error {
 	lead, err := s.leadRepo.GetLeadByID(ctx, id)
 	if err != nil {
@@ -154,8 +176,10 @@ func (s *LeadService) SetMockupURL(ctx context.Context, id, url, frontendURL str
 		return err
 	}
 
-	// Advance to milestone 1 — "Mockup Delivered"
-	if err := s.leadRepo.UpdateLeadMilestone(ctx, id, 1); err != nil {
+	// Marks "Designing Your Website" done and advances current to "Design Ready
+	// for Your Review" — the client's accept/reject decision lives there, not on
+	// "Design Approved" (that's only ever set automatically, via SubmitReview).
+	if err := s.leadRepo.UpdateLeadMilestone(ctx, id, milestoneOffset(*lead)+coreMockupDelivered); err != nil {
 		return err
 	}
 
@@ -176,15 +200,12 @@ func (s *LeadService) SetMockupURL(ctx context.Context, id, url, frontendURL str
 	return nil
 }
 
-const (
-	// MilestoneRevisionsSignedOff is the index clients jump to when they accept a mockup.
-	MilestoneRevisionsSignedOff = 2
-	// MilestoneSiteCompleted is set by the admin when the site build is done.
-	MilestoneSiteCompleted = 4
-)
-
 // SubmitReview handles the client's accept/request-changes decision on a mockup.
 // decision must be "accept" or "request_changes". feedback is required for request_changes.
+//
+// Accepting advances straight into "Building Your Website" rather than stopping on
+// "Design Approved" — that way Design Approved shows as done (not just
+// current) the moment the client accepts, without the admin ever setting it directly.
 func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision, feedback string) error {
 	lead, err := s.leadRepo.GetLeadByID(ctx, leadID)
 	if err != nil {
@@ -196,7 +217,7 @@ func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision
 
 	switch decision {
 	case "accept":
-		return s.leadRepo.UpdateLeadMilestone(ctx, leadID, MilestoneRevisionsSignedOff)
+		return s.leadRepo.UpdateLeadMilestone(ctx, leadID, milestoneOffset(*lead)+coreSiteInDevelopment)
 
 	case "request_changes":
 		if feedback == "" {
@@ -205,10 +226,18 @@ func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision
 		if err := s.leadRepo.SetRevisionFeedback(ctx, leadID, feedback); err != nil {
 			return err
 		}
+		// Un-check "Design Ready for Your Review" — the admin needs to deliver a new one
+		// before the client can review again.
+		if err := s.leadRepo.UpdateLeadMilestone(ctx, leadID, milestoneOffset(*lead)+coreMockupDelivered); err != nil {
+			return err
+		}
 		if s.notifier != nil {
 			go func(l model.Lead, fb string) {
 				if err := s.notifier.SendRevisionRequestEmail(l.Email, l.Business, fb); err != nil {
 					slog.Error("Failed to send revision request email", "lead_id", l.ID, "error", err)
+				}
+				if err := s.notifier.SendRevisionRequestConfirmationEmail(l.Email, l.Business); err != nil {
+					slog.Error("Failed to send revision request confirmation email", "lead_id", l.ID, "error", err)
 				}
 			}(*lead, feedback)
 		}
@@ -219,14 +248,18 @@ func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision
 	}
 }
 
-// CompleteSite marks the site as complete (milestone 4) and emails the client to pay.
+// CompleteSite advances current to "Payment" (where the client pays), then
+// emails the client to pay. "Website Ready" is deliberately left un-checked —
+// the frontend renders it as "sent" rather than done until MarkPaid moves the
+// milestone past it, so the admin sees confirmation the email went out
+// without the box looking prematurely complete.
 func (s *LeadService) CompleteSite(ctx context.Context, id, frontendURL string) error {
 	lead, err := s.leadRepo.GetLeadByID(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	if err := s.leadRepo.UpdateLeadMilestone(ctx, id, MilestoneSiteCompleted); err != nil {
+	if err := s.leadRepo.UpdateLeadMilestone(ctx, id, milestoneOffset(*lead)+corePayment); err != nil {
 		return err
 	}
 
@@ -259,7 +292,9 @@ func (s *LeadService) SetWantsMaintenance(ctx context.Context, leadID, userID st
 	return s.leadRepo.SetWantsMaintenance(ctx, leadID, wants)
 }
 
-// MarkPaid records payment and emails the client a receipt.
+// MarkPaid records payment, checks off "Website Ready" and "Payment" by
+// advancing the milestone to "Waiting for Launch" (current, awaiting the
+// admin to launch via LaunchSite), and emails the client a receipt.
 func (s *LeadService) MarkPaid(ctx context.Context, leadID, userID string) error {
 	lead, err := s.leadRepo.GetLeadByID(ctx, leadID)
 	if err != nil {
@@ -285,6 +320,9 @@ func (s *LeadService) MarkPaid(ctx context.Context, leadID, userID string) error
 	}
 
 	if err := s.leadRepo.MarkPaid(ctx, leadID, total); err != nil {
+		return err
+	}
+	if err := s.leadRepo.UpdateLeadMilestone(ctx, leadID, milestoneOffset(*lead)+coreWaitingForLaunch); err != nil {
 		return err
 	}
 
@@ -324,7 +362,7 @@ func (s *LeadService) LaunchSite(ctx context.Context, id, siteURL string) error 
 		return errors.New("payment required before launch")
 	}
 
-	if err := s.leadRepo.SetLaunched(ctx, id, siteURL); err != nil {
+	if err := s.leadRepo.SetLaunched(ctx, id, siteURL, milestoneOffset(*lead)+coreLaunched); err != nil {
 		return err
 	}
 

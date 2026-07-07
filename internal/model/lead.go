@@ -8,6 +8,7 @@ type Lead struct {
 	Name               string    `json:"name"`
 	Email              string    `json:"email"`
 	Business           string    `json:"business"`
+	Message            *string   `json:"message,omitempty"`
 	ExistingWebsite    *bool     `json:"existing_website,omitempty"`
 	ExistingWebsiteURL *string   `json:"existing_website_url,omitempty"`
 	SiteGoal           *string   `json:"site_goal,omitempty"`
@@ -23,6 +24,7 @@ type Lead struct {
 	ContactMethod      *string   `json:"contact_method,omitempty"`
 	Timeline           *string   `json:"timeline,omitempty"`
 	Package            *string   `json:"package,omitempty"`
+	WantsCall          bool       `json:"wants_call"`
 	Status             string     `json:"status"`
 	MilestoneIndex     int        `json:"milestone_index"`
 	MockupURL          *string    `json:"mockup_url,omitempty"`

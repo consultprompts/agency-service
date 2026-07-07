@@ -1,0 +1,1 @@
+ALTER TABLE leads ADD COLUMN wants_call BOOLEAN NOT NULL DEFAULT false;
