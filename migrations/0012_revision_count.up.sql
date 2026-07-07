@@ -1,0 +1,1 @@
+ALTER TABLE leads ADD COLUMN revision_count INT NOT NULL DEFAULT 0;

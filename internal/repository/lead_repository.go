@@ -22,7 +22,7 @@ const leadColumns = `
 	has_logo, logo_url, has_brand_colors, primary_color, secondary_color,
 	inspiration_urls, phone_number, contact_method, timeline,
 	package, wants_call, status, milestone_index, created_at,
-	mockup_url, revision_feedback, wants_maintenance,
+	mockup_url, revision_feedback, revision_count, wants_maintenance,
 	is_paid, paid_at, payment_amount, site_url, domain_renewal_date
 `
 
@@ -57,6 +57,7 @@ func scanLead(row interface {
 		&lead.CreatedAt,
 		&lead.MockupURL,
 		&lead.RevisionFeedback,
+		&lead.RevisionCount,
 		&lead.WantsMaintenance,
 		&lead.IsPaid,
 		&lead.PaidAt,
@@ -218,6 +219,11 @@ func (repo *LeadRepository) SetMockupURL(ctx context.Context, id, url string) er
 
 func (repo *LeadRepository) SetRevisionFeedback(ctx context.Context, id, feedback string) error {
 	_, err := repo.db.Exec(ctx, `UPDATE leads SET revision_feedback = $1 WHERE id = $2`, feedback, id)
+	return err
+}
+
+func (repo *LeadRepository) IncrementRevisionCount(ctx context.Context, id string) error {
+	_, err := repo.db.Exec(ctx, `UPDATE leads SET revision_count = revision_count + 1 WHERE id = $1`, id)
 	return err
 }
 

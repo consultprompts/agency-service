@@ -17,6 +17,7 @@ type LeadNotifier interface {
 	SendLeadConfirmation(lead model.Lead) error
 	SendLeadAccepted(lead model.Lead) error
 	SendMockupReadyEmail(to, projectLink string) error
+	SendRevisedMockupEmail(to, projectLink string) error
 	SendRevisionRequestEmail(clientEmail, businessName, feedback string) error
 	SendRevisionRequestConfirmationEmail(to, businessName string) error
 	SendPaymentRequestEmail(to, projectLink string) error
@@ -185,14 +186,21 @@ func (s *LeadService) SetMockupURL(ctx context.Context, id, url, frontendURL str
 
 	if s.notifier != nil {
 		projectLink := frontendURL + "/my-projects"
-		slog.Info("Sending mockup ready email", "lead_id", lead.ID, "to", lead.Email)
-		go func(l model.Lead) {
-			if err := s.notifier.SendMockupReadyEmail(l.Email, projectLink); err != nil {
-				slog.Error("Mockup ready email failed", "lead_id", l.ID, "to", l.Email, "error", err)
+		isSecondRevision := lead.RevisionCount >= 2
+		slog.Info("Sending mockup email", "lead_id", lead.ID, "to", lead.Email, "revision_count", lead.RevisionCount)
+		go func(l model.Lead, secondRevision bool) {
+			var err error
+			if secondRevision {
+				err = s.notifier.SendRevisedMockupEmail(l.Email, projectLink)
 			} else {
-				slog.Info("Mockup ready email sent", "lead_id", l.ID, "to", l.Email)
+				err = s.notifier.SendMockupReadyEmail(l.Email, projectLink)
 			}
-		}(*lead)
+			if err != nil {
+				slog.Error("Mockup email failed", "lead_id", l.ID, "to", l.Email, "error", err)
+			} else {
+				slog.Info("Mockup email sent", "lead_id", l.ID, "to", l.Email)
+			}
+		}(*lead, isSecondRevision)
 	} else {
 		slog.Warn("Mockup ready email skipped — email not configured", "lead_id", lead.ID)
 	}
@@ -224,6 +232,9 @@ func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision
 			return errors.New("feedback is required when requesting changes")
 		}
 		if err := s.leadRepo.SetRevisionFeedback(ctx, leadID, feedback); err != nil {
+			return err
+		}
+		if err := s.leadRepo.IncrementRevisionCount(ctx, leadID); err != nil {
 			return err
 		}
 		// Un-check "Design Ready for Your Review" — the admin needs to deliver a new one

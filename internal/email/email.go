@@ -8,8 +8,8 @@ import (
 
 	"github.com/resend/resend-go/v2"
 
-	shared "github.com/consultprompts/shared/email"
 	"github.com/consultprompts/agency-service/internal/model"
+	shared "github.com/consultprompts/shared/email"
 )
 
 // Client adapts the shared email client to the LeadNotifier interface.
@@ -22,7 +22,7 @@ type Client struct {
 // NewEmailClient returns nil when email is not configured.
 func NewEmailClient() *Client {
 	apiKey := os.Getenv("RESEND_API_KEY")
-	from   := os.Getenv("RESEND_FROM")
+	from := os.Getenv("RESEND_FROM")
 	sharedClient := shared.NewClient()
 
 	if sharedClient == nil || apiKey == "" || from == "" {
@@ -83,6 +83,37 @@ func (c *Client) SendMockupReadyEmail(to, projectLink string) error {
 	})
 	if err != nil {
 		slog.Error("Failed to send mockup ready email", "to", to, "error", err)
+	}
+	return err
+}
+
+// SendRevisedMockupEmail notifies the client that their revised mockup (after a
+// second or later change request) is ready to review.
+func (c *Client) SendRevisedMockupEmail(to, projectLink string) error {
+	body := fmt.Sprintf(`
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:24px;"><tr>
+      <td width="56" height="56" style="width:56px; height:56px; background:rgba(112,0,255,0.1); border-radius:28px; text-align:center; vertical-align:middle;">
+        <span style="font-size:22px; line-height:56px; display:block;">&#10055;</span>
+      </td>
+    </tr></table>
+    <h2 style="margin:0 0 10px; font-family:'Space Grotesk',Georgia,serif; font-style:italic; font-size:26px; font-weight:700; letter-spacing:-0.02em; color:#ffffff;">Your Revised Mockup is Ready!</h2>
+    <p style="margin:0 0 30px; color:#A1A1A1; font-size:14px; font-weight:300; line-height:1.7;">We've carefully worked through all your feedback and updated your design. Open your project page to review the changes — we believe this one hits the mark.</p>
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:28px;"><tr>
+      <td style="background:#B98CFF; border-radius:8px;">
+        <a href="%s" style="display:inline-block; padding:15px 30px; font-size:12px; font-weight:900; letter-spacing:0.14em; text-transform:uppercase; color:#050505; text-decoration:none; font-family:'Inter',Arial,Helvetica,sans-serif;">Review My Mockup</a>
+      </td>
+    </tr></table>
+    <p style="margin:0; font-size:12px; color:#555555; line-height:1.6;">Have questions? Just reply to this email — we read every one.</p>
+`, projectLink)
+
+	_, err := c.resend.Emails.Send(&resend.SendEmailRequest{
+		From:    c.from,
+		To:      []string{to},
+		Subject: "Your revised mockup is ready to review — consultprompts.com",
+		Html:    openEmail() + body + closeEmail(),
+	})
+	if err != nil {
+		slog.Error("Failed to send revised mockup email", "to", to, "error", err)
 	}
 	return err
 }
@@ -165,7 +196,7 @@ func (c *Client) SendPaymentRequestEmail(to, projectLink string) error {
     <p style="margin:0 0 30px; color:#A1A1A1; font-size:14px; font-weight:300; line-height:1.7;">Your website is built and ready to launch. Complete your payment through your project page and we'll get it live immediately.</p>
     <table cellpadding="0" cellspacing="0" style="margin-bottom:28px;"><tr>
       <td style="background:#00F0FF; border-radius:8px;">
-        <a href="%s" style="display:inline-block; padding:15px 30px; font-size:12px; font-weight:900; letter-spacing:0.14em; text-transform:uppercase; color:#050505; text-decoration:none; font-family:'Inter',Arial,Helvetica,sans-serif;">Complete Payment &amp; Launch</a>
+        <a href="%s" style="display:inline-block; padding:15px 30px; font-size:12px; font-weight:900; letter-spacing:0.14em; text-transform:uppercase; color:#050505; text-decoration:none; font-family:'Inter',Arial,Helvetica,sans-serif;">Complete Payment</a>
       </td>
     </tr></table>
     <p style="margin:0; font-size:12px; color:#555555; line-height:1.6;">Have questions? Just reply to this email — we read every one.</p>

@@ -29,6 +29,7 @@ type Lead struct {
 	MilestoneIndex     int        `json:"milestone_index"`
 	MockupURL          *string    `json:"mockup_url,omitempty"`
 	RevisionFeedback   *string    `json:"revision_feedback,omitempty"`
+	RevisionCount      int        `json:"revision_count"`
 	WantsMaintenance   bool       `json:"wants_maintenance"`
 	IsPaid             bool       `json:"is_paid"`
 	PaidAt             *time.Time `json:"paid_at,omitempty"`
