@@ -34,7 +34,7 @@ func main() {
 
 	router := gin.New()
 	router.SetTrustedProxies(nil)
-	router.Use(middleware.RequestLogger())
+	router.Use(middleware.RequestLogger(), gin.Recovery())
 
 	router.GET("/healthz", func(c *gin.Context) {
 		if err := pool.Ping(c.Request.Context()); err != nil {
