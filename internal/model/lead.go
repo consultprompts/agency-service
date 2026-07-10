@@ -11,6 +11,7 @@ type Lead struct {
 	Message            *string   `json:"message,omitempty"`
 	ExistingWebsite    *bool     `json:"existing_website,omitempty"`
 	ExistingWebsiteURL *string   `json:"existing_website_url,omitempty"`
+	Location           *string   `json:"location,omitempty"`
 	SiteGoal           *string   `json:"site_goal,omitempty"`
 	PagesNeeded        []string  `json:"pages_needed,omitempty"`
 	StyleDirection     *string   `json:"style_direction,omitempty"`
@@ -25,7 +26,12 @@ type Lead struct {
 	Timeline           *string   `json:"timeline,omitempty"`
 	Package            *string   `json:"package,omitempty"`
 	WantsCall          bool       `json:"wants_call"`
+	MeetingSkipped     bool       `json:"meeting_skipped"`
 	Status             string     `json:"status"`
+	// PreSuspendStatus is internal bookkeeping only — never serialized — so a
+	// suspended project can be reactivated back to whatever it was (pending,
+	// accepted, revision) instead of guessing.
+	PreSuspendStatus   *string    `json:"-"`
 	MilestoneIndex     int        `json:"milestone_index"`
 	MockupURL          *string    `json:"mockup_url,omitempty"`
 	RevisionFeedback   *string    `json:"revision_feedback,omitempty"`

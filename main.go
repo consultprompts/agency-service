@@ -59,6 +59,10 @@ func main() {
 	leadService := service.NewLeadService(leadRepo, notifier)
 	leadHandler := handler.NewLeadHandler(leadService)
 
+	// Payment provider callbacks carry a shared secret, not a user JWT —
+	// registered outside the RequireUserID group. See handler.PaymentWebhook.
+	router.POST("/webhooks/payment-success", leadHandler.PaymentWebhook)
+
 	protected := router.Group("/")
 	protected.Use(middleware.RequireUserID())
 	{
@@ -67,6 +71,7 @@ func main() {
 		protected.POST("/agency/leads/:id/review", leadHandler.SubmitReview)
 		protected.PATCH("/agency/leads/:id/maintenance", leadHandler.SetWantsMaintenance)
 		protected.POST("/agency/leads/:id/pay", leadHandler.MarkPaid)
+		protected.POST("/agency/leads/:id/request-meeting", leadHandler.RequestMeeting)
 
 		admin := protected.Group("/")
 		admin.Use(middleware.RequireAdminRole())
@@ -76,6 +81,7 @@ func main() {
 			admin.PATCH("/agency/leads/:id/mockup", leadHandler.SetMockupURL)
 			admin.PATCH("/agency/leads/:id/complete", leadHandler.CompleteSite)
 			admin.PATCH("/agency/leads/:id/launch", leadHandler.LaunchSite)
+			admin.PATCH("/agency/leads/:id/suspend", leadHandler.SetSuspended)
 		}
 	}
 

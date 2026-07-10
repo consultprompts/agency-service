@@ -12,13 +12,15 @@ Sits behind the API Gateway — never exposed directly to the internet.
 - Lead capture — name, email, business, selected package, and the project
   brief (goals, pages, branding, timeline, …)
 - Lead status tracking (`pending` / `accepted` / `completed` / `launched`)
-- Project milestone tracking as a single `milestone_index` int per lead,
-  walking a fixed stage list shared with the frontend
-  (`website/src/lib/milestones.ts` ↔ the `core*` constants in
-  `lead_service.go`): Designing Your Website → Design Ready for Your Review
-  → Design Approved → Building Your Website → Website Ready → Payment →
-  Waiting for Launch → Website Is Live, optionally preceded by Discovery
-  Call Completed when the lead requested a call
+- Project milestone tracking as a single `milestone_index` int per lead that
+  counts COMPLETED milestones (0–6; milestone k is done iff index ≥ k), over
+  a fixed six-milestone list shared with the frontend
+  (`website/src/lib/milestones.ts` ↔ `internal/model/milestone.go`):
+  Meeting Completed → Mockup Completed → Design Approved → Website Completed
+  → Payment Completed → Website is Live. Mockup Completed and Design Approved
+  are only ever checked together, when the client approves the design;
+  Payment Completed is only ever checked by payment confirmation (client
+  pay endpoint or the payment webhook)
 - The client-facing project workflow: mockup delivery & review
   (accept / request changes), site completion, payment recording, and launch
 - Email notifications via Resend (optional — disabled when the env vars
@@ -120,18 +122,22 @@ agency-service/
 | GET | /healthz | No | Health check with DB connectivity verification |
 | POST | /agency/leads | Yes (any authenticated user) | Submit a mockup request |
 | GET | /agency/leads/mine | Yes (any authenticated user) | List the caller's own leads |
-| POST | /agency/leads/:id/review | Yes (lead owner) | Accept the mockup or request changes |
+| POST | /agency/leads/:id/review | Yes (lead owner) | Approve the design (checks Mockup Completed + Design Approved) or request changes |
 | PATCH | /agency/leads/:id/maintenance | Yes (lead owner) | Toggle the monthly-maintenance preference |
-| POST | /agency/leads/:id/pay | Yes (lead owner) | Record payment; advances milestone to Waiting for Launch |
+| POST | /agency/leads/:id/pay | Yes (lead owner) | Record payment; checks Payment Completed |
 | GET | /agency/leads | Yes (admin only) | List all leads |
-| PATCH | /agency/leads/:id/milestone | Yes (admin only) | Set a lead's milestone_index |
-| PATCH | /agency/leads/:id/mockup | Yes (admin only) | Save the mockup URL and notify the client to review |
-| PATCH | /agency/leads/:id/complete | Yes (admin only) | Mark the site ready and email the client to pay |
-| PATCH | /agency/leads/:id/launch | Yes (admin only) | Set the live site URL and mark the lead launched (requires payment) |
+| PATCH | /agency/leads/:id/milestone | Yes (admin only) | Accept a lead (0), check Meeting Completed (1), or undo; auto-set milestones are rejected |
+| PATCH | /agency/leads/:id/mockup | Yes (admin only) | Save the mockup URL and notify the client to review — Mockup Completed stays unchecked until approval |
+| PATCH | /agency/leads/:id/complete | Yes (admin only) | Check Website Completed and email the client to pay |
+| PATCH | /agency/leads/:id/launch | Yes (admin only) | Set the live site URL and check Website is Live (requires payment) |
+| POST | /webhooks/payment-success | Shared secret (`X-Webhook-Secret`) | Payment provider callback: `{"project_id": "<lead id>"}` checks Payment Completed. Idempotent; rejects everything until `PAYMENT_WEBHOOK_SECRET` is set |
 
-All routes except `/healthz` require the request to have passed through
-the API Gateway's JWT verification — this service reads `X-User-ID` and
-`X-User-Roles` from the request headers rather than checking a token itself.
+All routes except `/healthz` and `/webhooks/payment-success` require the
+request to have passed through the API Gateway's JWT verification — this
+service reads `X-User-ID` and `X-User-Roles` from the request headers rather
+than checking a token itself. The payment webhook instead authenticates with
+the `PAYMENT_WEBHOOK_SECRET` shared secret, since payment providers cannot
+send user JWTs.
 
 ### Response Shape
 

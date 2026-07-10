@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
@@ -38,6 +39,7 @@ type CreateLeadRequest struct {
 	Message            *string  `json:"message"             form:"message"`
 	ExistingWebsite    *bool    `json:"existing_website"    form:"existing_website"`
 	ExistingWebsiteURL *string  `json:"existing_website_url" form:"existing_website_url"`
+	Location           *string  `json:"location"            form:"location"`
 	SiteGoal           *string  `json:"site_goal"           form:"site_goal"`
 	PagesNeeded        []string `json:"pages_needed"        form:"pages_needed[]"`
 	StyleDirection     *string  `json:"style_direction"     form:"style_direction"`
@@ -89,6 +91,7 @@ func (h *LeadHandler) CreateLead(c *gin.Context) {
 		Message:            req.Message,
 		ExistingWebsite:    req.ExistingWebsite,
 		ExistingWebsiteURL: req.ExistingWebsiteURL,
+		Location:           req.Location,
 		SiteGoal:           req.SiteGoal,
 		PagesNeeded:        req.PagesNeeded,
 		StyleDirection:     req.StyleDirection,
@@ -291,6 +294,40 @@ func (h *LeadHandler) SetWantsMaintenance(c *gin.Context) {
 	respondOK(c, gin.H{"message": "maintenance preference saved"})
 }
 
+type PaymentWebhookRequest struct {
+	ProjectID string `json:"project_id" binding:"required"`
+}
+
+// PaymentWebhook simulates a payment provider's server-to-server success
+// callback (e.g. a Stripe webhook). It is unauthenticated at the user level —
+// providers can't send our JWTs — so it is guarded by a shared secret instead:
+// the X-Webhook-Secret header must match PAYMENT_WEBHOOK_SECRET. Fails closed
+// when the secret isn't configured.
+func (h *LeadHandler) PaymentWebhook(c *gin.Context) {
+	secret := os.Getenv("PAYMENT_WEBHOOK_SECRET")
+	if secret == "" {
+		respondError(c, http.StatusServiceUnavailable, "WEBHOOK_NOT_CONFIGURED", "PAYMENT_WEBHOOK_SECRET is not set")
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(c.GetHeader("X-Webhook-Secret")), []byte(secret)) != 1 {
+		respondError(c, http.StatusUnauthorized, "INVALID_SIGNATURE", "webhook secret mismatch")
+		return
+	}
+
+	var req PaymentWebhookRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+
+	if err := h.leadService.ConfirmPaymentWebhook(c.Request.Context(), req.ProjectID); err != nil {
+		respondError(c, http.StatusUnprocessableEntity, "PAYMENT_NOT_APPLICABLE", err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"message": "payment confirmed"})
+}
+
 func (h *LeadHandler) MarkPaid(c *gin.Context) {
 	id := c.Param("id")
 	userID, _ := c.Get(middleware.ContextUserID)
@@ -335,4 +372,56 @@ func (h *LeadHandler) LaunchSite(c *gin.Context) {
 	}
 
 	respondOK(c, gin.H{"message": "site launched"})
+}
+
+type SetSuspendedRequest struct {
+	Suspended bool `json:"suspended"`
+}
+
+// SetSuspended pauses or resumes an in-flight project (admin only).
+func (h *LeadHandler) SetSuspended(c *gin.Context) {
+	id := c.Param("id")
+
+	var req SetSuspendedRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+
+	var (
+		newStatus string
+		err       error
+	)
+	message := "project reactivated"
+	if req.Suspended {
+		newStatus, err = h.leadService.SuspendLead(c.Request.Context(), id)
+		message = "project suspended"
+	} else {
+		newStatus, err = h.leadService.ReactivateLead(c.Request.Context(), id)
+	}
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"message": message, "status": newStatus})
+}
+
+// RequestMeeting lets a client who skipped the initial 15-minute call ask for
+// one after all — only available while the meeting is still marked skipped.
+func (h *LeadHandler) RequestMeeting(c *gin.Context) {
+	id := c.Param("id")
+	userID, _ := c.Get(middleware.ContextUserID)
+
+	err := h.leadService.RequestMeeting(c.Request.Context(), id, userID.(string))
+	if err != nil {
+		if err.Error() == "forbidden" {
+			respondError(c, http.StatusForbidden, "FORBIDDEN", "you do not own this lead")
+			return
+		}
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"message": "meeting requested"})
 }

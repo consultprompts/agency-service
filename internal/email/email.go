@@ -311,6 +311,41 @@ func (c *Client) SendSiteLaunchedEmail(to, siteURL, businessName string) error {
 	return err
 }
 
+// meetingRequestRecipient is fixed rather than driven by ADMIN_NOTIFICATION_EMAIL
+// — meeting requests always go to the inbox that owns scheduling.
+const meetingRequestRecipient = "consultprompts@gmail.com"
+
+// SendMeetingRequestEmail notifies the admin that a client who originally
+// skipped the 15-minute call wants one after all.
+func (c *Client) SendMeetingRequestEmail(clientName, clientEmail, business string) error {
+	body := fmt.Sprintf(`
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:24px;"><tr>
+      <td width="56" height="56" style="width:56px; height:56px; background:rgba(0,240,255,0.1); border-radius:28px; text-align:center; vertical-align:middle;">
+        <span style="font-size:22px; line-height:56px; display:block;">&#128197;</span>
+      </td>
+    </tr></table>
+    <h2 style="margin:0 0 10px; font-family:'Space Grotesk',Georgia,serif; font-style:italic; font-size:26px; font-weight:700; letter-spacing:-0.02em; color:#ffffff;">Meeting Requested</h2>
+    <p style="margin:0 0 30px; color:#A1A1A1; font-size:14px; font-weight:300; line-height:1.7;"><strong style="color:#ffffff;">%s</strong> (<a href="mailto:%s" style="color:#00F0FF;">%s</a>), who originally skipped the 15-minute call for <strong style="color:#ffffff;">%s</strong>, would now like to schedule one.</p>
+    <p style="margin:0; font-size:12px; color:#555555; line-height:1.6;">Reach out to the client directly to find a time.</p>
+`,
+		html.EscapeString(clientName),
+		html.EscapeString(clientEmail),
+		html.EscapeString(clientEmail),
+		html.EscapeString(business),
+	)
+
+	_, err := c.resend.Emails.Send(&resend.SendEmailRequest{
+		From:    c.from,
+		To:      []string{meetingRequestRecipient},
+		Subject: fmt.Sprintf("Meeting requested: %s — consultprompts.com", business),
+		Html:    openEmail() + body + closeEmail(),
+	})
+	if err != nil {
+		slog.Error("Failed to send meeting request email", "business", business, "error", err)
+	}
+	return err
+}
+
 // SendLeadAccepted emails the customer when an admin accepts their project.
 func (c *Client) SendLeadAccepted(lead model.Lead) error {
 	frontendURL := os.Getenv("FRONTEND_URL")

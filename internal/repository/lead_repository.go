@@ -18,10 +18,10 @@ func NewLeadRepository(db *pgxpool.Pool) *LeadRepository {
 const leadColumns = `
 	id, user_id, name, email, business, message,
 	existing_website, existing_website_url,
-	site_goal, pages_needed, style_direction,
+	location, site_goal, pages_needed, style_direction,
 	has_logo, logo_url, has_brand_colors, primary_color, secondary_color,
 	inspiration_urls, phone_number, contact_method, timeline,
-	package, wants_call, status, milestone_index, created_at,
+	package, wants_call, meeting_skipped, status, pre_suspend_status, milestone_index, created_at,
 	mockup_url, revision_feedback, revision_count, wants_maintenance,
 	is_paid, paid_at, payment_amount, site_url, domain_renewal_date
 `
@@ -38,6 +38,7 @@ func scanLead(row interface {
 		&lead.Message,
 		&lead.ExistingWebsite,
 		&lead.ExistingWebsiteURL,
+		&lead.Location,
 		&lead.SiteGoal,
 		&lead.PagesNeeded,
 		&lead.StyleDirection,
@@ -52,7 +53,9 @@ func scanLead(row interface {
 		&lead.Timeline,
 		&lead.Package,
 		&lead.WantsCall,
+		&lead.MeetingSkipped,
 		&lead.Status,
+		&lead.PreSuspendStatus,
 		&lead.MilestoneIndex,
 		&lead.CreatedAt,
 		&lead.MockupURL,
@@ -72,17 +75,17 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 		INSERT INTO leads (
 			user_id, name, email, business, message,
 			existing_website, existing_website_url,
-			site_goal, pages_needed, style_direction,
+			location, site_goal, pages_needed, style_direction,
 			has_logo, logo_url, has_brand_colors, primary_color, secondary_color,
 			inspiration_urls, phone_number, contact_method, timeline,
-			package, wants_call
+			package, wants_call, meeting_skipped, milestone_index
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7,
-			$8, $9, $10,
-			$11, $12, $13, $14, $15,
-			$16, $17, $18, $19,
-			$20, $21
+			$8, $9, $10, $11,
+			$12, $13, $14, $15, $16,
+			$17, $18, $19, $20,
+			$21, $22, $23, $24
 		)
 		RETURNING id, status, milestone_index, created_at
 	`
@@ -95,6 +98,7 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 		lead.Message,
 		lead.ExistingWebsite,
 		lead.ExistingWebsiteURL,
+		lead.Location,
 		lead.SiteGoal,
 		lead.PagesNeeded,
 		lead.StyleDirection,
@@ -109,6 +113,8 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 		lead.Timeline,
 		lead.Package,
 		lead.WantsCall,
+		lead.MeetingSkipped,
+		lead.MilestoneIndex,
 	).Scan(&lead.ID, &lead.Status, &lead.MilestoneIndex, &lead.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -212,13 +218,19 @@ func (repo *LeadRepository) SetLaunched(ctx context.Context, id, siteURL string,
 
 func (repo *LeadRepository) SetMockupURL(ctx context.Context, id, url string) error {
 	// Clear any prior revision feedback — a fresh mockup means the client's
-	// last request for changes has been addressed.
-	_, err := repo.db.Exec(ctx, `UPDATE leads SET mockup_url = $1, revision_feedback = NULL WHERE id = $2`, url, id)
+	// last request for changes has been addressed — and leave 'revision' status.
+	_, err := repo.db.Exec(ctx,
+		`UPDATE leads SET mockup_url = $1, revision_feedback = NULL, status = 'accepted' WHERE id = $2`,
+		url, id,
+	)
 	return err
 }
 
 func (repo *LeadRepository) SetRevisionFeedback(ctx context.Context, id, feedback string) error {
-	_, err := repo.db.Exec(ctx, `UPDATE leads SET revision_feedback = $1 WHERE id = $2`, feedback, id)
+	_, err := repo.db.Exec(ctx,
+		`UPDATE leads SET revision_feedback = $1, status = 'revision' WHERE id = $2`,
+		feedback, id,
+	)
 	return err
 }
 
@@ -227,8 +239,15 @@ func (repo *LeadRepository) IncrementRevisionCount(ctx context.Context, id strin
 	return err
 }
 
-func (repo *LeadRepository) SetLeadStatus(ctx context.Context, id, status string) error {
-	_, err := repo.db.Exec(ctx, `UPDATE leads SET status = $1 WHERE id = $2`, status, id)
+// SetSuspended writes the new status and the pre_suspend_status bookkeeping
+// column in one shot — used both to suspend (status="suspended", preStatus =
+// what it was) and to reactivate (status = the saved preStatus, preStatus =
+// nil).
+func (repo *LeadRepository) SetSuspended(ctx context.Context, id, status string, preStatus *string) error {
+	_, err := repo.db.Exec(ctx,
+		`UPDATE leads SET status = $1, pre_suspend_status = $2 WHERE id = $3`,
+		status, preStatus, id,
+	)
 	return err
 }
 
