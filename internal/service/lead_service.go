@@ -143,9 +143,6 @@ func (s *LeadService) UpdateLeadMilestone(ctx context.Context, id string, milest
 	if milestoneIndex == offset+corePayment {
 		return errors.New("Payment is set automatically when the admin marks the site ready")
 	}
-	if milestoneIndex == offset+coreWaitingForLaunch {
-		return errors.New("Waiting for Launch is set automatically when the client pays")
-	}
 
 	wasPending := lead.Status == "pending"
 
@@ -240,6 +237,9 @@ func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision
 		// Un-check "Design Ready for Your Review" — the admin needs to deliver a new one
 		// before the client can review again.
 		if err := s.leadRepo.UpdateLeadMilestone(ctx, leadID, milestoneOffset(*lead)+coreMockupDelivered); err != nil {
+			return err
+		}
+		if err := s.leadRepo.SetLeadStatus(ctx, leadID, "revision"); err != nil {
 			return err
 		}
 		if s.notifier != nil {
