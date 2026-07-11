@@ -24,6 +24,8 @@ type LeadNotifier interface {
 	SendSiteLaunchedEmail(to, siteURL, businessName string) error
 	SendPaymentReceiptEmail(to, businessName, packageName string, packagePrice, totalAmount int, wantsMaintenance bool, domainRenewalDate string) error
 	SendMeetingRequestEmail(clientName, clientEmail, business string) error
+	SendProjectSuspendedEmail(to, name, business string) error
+	SendProjectReactivatedEmail(to, name, business string) error
 }
 
 // Package pricing — must stay in sync with website/src/data/content.tsx PACKAGES.
@@ -53,6 +55,32 @@ type LeadService struct {
 
 func NewLeadService(leadRepo *repository.LeadRepository, notifier LeadNotifier) *LeadService {
 	return &LeadService{leadRepo: leadRepo, notifier: notifier}
+}
+
+var ErrLeadNotPending = errors.New("lead can only be edited while it is pending review")
+
+func (s *LeadService) UpdateLead(ctx context.Context, id, userID string, lead model.Lead) error {
+	existing, err := s.leadRepo.GetLeadByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if existing.UserID != userID {
+		return errors.New("forbidden")
+	}
+	if existing.Status != "pending" {
+		return ErrLeadNotPending
+	}
+
+	lead.UserID = userID
+	if !lead.WantsCall {
+		lead.MeetingSkipped = true
+		lead.MilestoneIndex = model.MilestoneMeeting
+	} else {
+		lead.MeetingSkipped = false
+		lead.MilestoneIndex = model.MilestoneNone
+	}
+
+	return s.leadRepo.UpdateLead(ctx, id, lead)
 }
 
 func (s *LeadService) CreateLead(ctx context.Context, userID string, lead model.Lead) (*model.Lead, error) {
@@ -148,12 +176,19 @@ func (s *LeadService) UpdateLeadMilestone(ctx context.Context, id string, milest
 	}
 
 	wasPending := lead.Status == "pending"
+	isAccept := milestoneIndex == model.MilestoneNone && wasPending
+
+	// When accepting a lead that skipped the intro call, the meeting milestone
+	// is already done — write MilestoneMeeting so the checklist reflects that.
+	if isAccept && lead.MeetingSkipped {
+		milestoneIndex = model.MilestoneMeeting
+	}
 
 	if err := s.leadRepo.UpdateLeadMilestone(ctx, id, milestoneIndex); err != nil {
 		return err
 	}
 
-	if milestoneIndex == model.MilestoneNone && wasPending && s.notifier != nil {
+	if isAccept && s.notifier != nil {
 		go func(l model.Lead) {
 			if err := s.notifier.SendLeadAccepted(l); err != nil {
 				slog.Error("Failed to send lead accepted email", "lead_id", l.ID, "error", err)
@@ -184,6 +219,15 @@ func (s *LeadService) SetMockupURL(ctx context.Context, id, url, frontendURL str
 		return err
 	}
 
+	// Advance to MilestoneMockup on first send so the checklist reflects that
+	// the mockup is ready. On re-sends after client changes the index is already
+	// at MilestoneMockup, so we leave it untouched.
+	if lead.MilestoneIndex == model.MilestoneMeeting {
+		if err := s.leadRepo.UpdateLeadMilestone(ctx, id, model.MilestoneMockup); err != nil {
+			return err
+		}
+	}
+
 	if s.notifier != nil {
 		projectLink := frontendURL + "/my-projects"
 		isSecondRevision := lead.RevisionCount >= 2
@@ -211,9 +255,8 @@ func (s *LeadService) SetMockupURL(ctx context.Context, id, url, frontendURL str
 // SubmitReview handles the client's accept/request-changes decision on a mockup.
 // decision must be "accept" or "request_changes". feedback is required for request_changes.
 //
-// Accepting checks off BOTH "Mockup Completed" and "Design Approved" in one
-// jump (index 1 -> 3) — the mockup only counts as completed once the client
-// has signed off on it.
+// Accepting checks off "Design Approved" (index 2 -> 3); "Mockup Completed"
+// was already checked when the admin sent the URL.
 func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision, feedback string) error {
 	lead, err := s.leadRepo.GetLeadByID(ctx, leadID)
 	if err != nil {
@@ -222,7 +265,7 @@ func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision
 	if lead.UserID != userID {
 		return errors.New("forbidden")
 	}
-	if lead.MockupURL == nil || lead.MilestoneIndex != model.MilestoneMeeting {
+	if lead.MockupURL == nil || lead.MilestoneIndex != model.MilestoneMockup {
 		return errors.New("there is no mockup awaiting review")
 	}
 
@@ -234,8 +277,11 @@ func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision
 		if feedback == "" {
 			return errors.New("feedback is required when requesting changes")
 		}
-		// Milestone stays where it is — "Mockup Completed" was never checked.
-		// The admin sends a revised mockup URL and the client reviews again.
+		// Reset to MilestoneMeeting so "Mockup Completed" unchecks — the admin
+		// sends a revised URL which re-advances it to MilestoneMockup.
+		if err := s.leadRepo.UpdateLeadMilestone(ctx, leadID, model.MilestoneMeeting); err != nil {
+			return err
+		}
 		if err := s.leadRepo.SetRevisionFeedback(ctx, leadID, feedback); err != nil {
 			return err
 		}
@@ -437,6 +483,15 @@ func (s *LeadService) SuspendLead(ctx context.Context, leadID string) (string, e
 	if err := s.leadRepo.SetSuspended(ctx, leadID, "suspended", &current); err != nil {
 		return "", err
 	}
+
+	if s.notifier != nil {
+		go func(l model.Lead) {
+			if err := s.notifier.SendProjectSuspendedEmail(l.Email, l.Name, l.Business); err != nil {
+				slog.Error("Failed to send project suspended email", "lead_id", l.ID, "error", err)
+			}
+		}(*lead)
+	}
+
 	return "suspended", nil
 }
 
@@ -458,6 +513,15 @@ func (s *LeadService) ReactivateLead(ctx context.Context, leadID string) (string
 	if err := s.leadRepo.SetSuspended(ctx, leadID, resumeStatus, nil); err != nil {
 		return "", err
 	}
+
+	if s.notifier != nil {
+		go func(l model.Lead) {
+			if err := s.notifier.SendProjectReactivatedEmail(l.Email, l.Name, l.Business); err != nil {
+				slog.Error("Failed to send project reactivated email", "lead_id", l.ID, "error", err)
+			}
+		}(*lead)
+	}
+
 	return resumeStatus, nil
 }
 

@@ -161,10 +161,31 @@ func (repo *LeadRepository) CountLeads(ctx context.Context) (int, error) {
 	return total, err
 }
 
+func (repo *LeadRepository) UpdateLead(ctx context.Context, id string, lead model.Lead) error {
+	_, err := repo.db.Exec(ctx, `
+		UPDATE leads SET
+			name = $1, business = $2, message = $3,
+			existing_website = $4, existing_website_url = $5,
+			location = $6, site_goal = $7, pages_needed = $8, style_direction = $9,
+			has_logo = $10, has_brand_colors = $11, primary_color = $12, secondary_color = $13,
+			inspiration_urls = $14, phone_number = $15, contact_method = $16, timeline = $17,
+			package = $18, wants_call = $19, meeting_skipped = $20, milestone_index = $21
+		WHERE id = $22 AND status = 'pending'`,
+		lead.Name, lead.Business, lead.Message,
+		lead.ExistingWebsite, lead.ExistingWebsiteURL,
+		lead.Location, lead.SiteGoal, lead.PagesNeeded, lead.StyleDirection,
+		lead.HasLogo, lead.HasBrandColors, lead.PrimaryColor, lead.SecondaryColor,
+		lead.InspirationURLs, lead.PhoneNumber, lead.ContactMethod, lead.Timeline,
+		lead.Package, lead.WantsCall, lead.MeetingSkipped, lead.MilestoneIndex,
+		id,
+	)
+	return err
+}
+
 func (repo *LeadRepository) HasActiveLead(ctx context.Context, userID string) (bool, error) {
 	var count int
 	err := repo.db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM leads WHERE user_id = $1 AND status NOT IN ('completed', 'launched')`,
+		`SELECT COUNT(*) FROM leads WHERE user_id = $1 AND status NOT IN ('completed', 'launched', 'suspended')`,
 		userID,
 	).Scan(&count)
 	return count > 0, err

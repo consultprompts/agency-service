@@ -311,6 +311,76 @@ func (c *Client) SendSiteLaunchedEmail(to, siteURL, businessName string) error {
 	return err
 }
 
+// SendProjectSuspendedEmail notifies the client that their project has been paused.
+func (c *Client) SendProjectSuspendedEmail(to, name, business string) error {
+	frontendURL := os.Getenv("FRONTEND_URL")
+	body := fmt.Sprintf(`
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:24px;"><tr>
+      <td width="56" height="56" style="width:56px; height:56px; background:rgba(255,107,107,0.1); border-radius:28px; text-align:center; vertical-align:middle;">
+        <span style="font-size:22px; line-height:56px; display:block;">&#9208;&#65039;</span>
+      </td>
+    </tr></table>
+    <h2 style="margin:0 0 10px; font-family:'Space Grotesk',Georgia,serif; font-style:italic; font-size:26px; font-weight:700; letter-spacing:-0.02em; color:#ffffff;">Project Paused</h2>
+    <p style="margin:0 0 30px; color:#A1A1A1; font-size:14px; font-weight:300; line-height:1.7;">Hi %s — work on <strong style="color:#ffffff;">%s</strong> has been temporarily paused. If you have any questions or would like to discuss next steps, just reply to this email.</p>
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:28px;"><tr>
+      <td style="background:rgba(255,107,107,0.15); border:1px solid rgba(255,107,107,0.4); border-radius:8px;">
+        <a href="%s/my-projects" style="display:inline-block; padding:15px 30px; font-size:12px; font-weight:900; letter-spacing:0.14em; text-transform:uppercase; color:#FF6B6B; text-decoration:none; font-family:'Inter',Arial,Helvetica,sans-serif;">View My Project</a>
+      </td>
+    </tr></table>
+    <p style="margin:0; font-size:12px; color:#555555; line-height:1.6;">Have questions? Just reply to this email — we read every one.</p>
+`,
+		html.EscapeString(name),
+		html.EscapeString(business),
+		frontendURL,
+	)
+
+	_, err := c.resend.Emails.Send(&resend.SendEmailRequest{
+		From:    c.from,
+		To:      []string{to},
+		Subject: fmt.Sprintf("Your project has been paused — %s — consultprompts.com", business),
+		Html:    openEmail() + body + closeEmail(),
+	})
+	if err != nil {
+		slog.Error("Failed to send project suspended email", "to", to, "error", err)
+	}
+	return err
+}
+
+// SendProjectReactivatedEmail notifies the client that their project has resumed.
+func (c *Client) SendProjectReactivatedEmail(to, name, business string) error {
+	frontendURL := os.Getenv("FRONTEND_URL")
+	body := fmt.Sprintf(`
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:24px;"><tr>
+      <td width="56" height="56" style="width:56px; height:56px; background:rgba(0,240,255,0.1); border-radius:28px; text-align:center; vertical-align:middle;">
+        <span style="font-size:22px; line-height:56px; display:block;">&#9654;&#65039;</span>
+      </td>
+    </tr></table>
+    <h2 style="margin:0 0 10px; font-family:'Space Grotesk',Georgia,serif; font-style:italic; font-size:26px; font-weight:700; letter-spacing:-0.02em; color:#ffffff;">Project Reactivated!</h2>
+    <p style="margin:0 0 30px; color:#A1A1A1; font-size:14px; font-weight:300; line-height:1.7;">Hi %s — great news! Work on <strong style="color:#ffffff;">%s</strong> has resumed. Track your progress from your project dashboard.</p>
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:28px;"><tr>
+      <td style="background:#00F0FF; border-radius:8px;">
+        <a href="%s/my-projects" style="display:inline-block; padding:15px 30px; font-size:12px; font-weight:900; letter-spacing:0.14em; text-transform:uppercase; color:#050505; text-decoration:none; font-family:'Inter',Arial,Helvetica,sans-serif;">Track My Project</a>
+      </td>
+    </tr></table>
+    <p style="margin:0; font-size:12px; color:#555555; line-height:1.6;">Have questions? Just reply to this email — we read every one.</p>
+`,
+		html.EscapeString(name),
+		html.EscapeString(business),
+		frontendURL,
+	)
+
+	_, err := c.resend.Emails.Send(&resend.SendEmailRequest{
+		From:    c.from,
+		To:      []string{to},
+		Subject: fmt.Sprintf("Your project is back on track — %s — consultprompts.com", business),
+		Html:    openEmail() + body + closeEmail(),
+	})
+	if err != nil {
+		slog.Error("Failed to send project reactivated email", "to", to, "error", err)
+	}
+	return err
+}
+
 // meetingRequestRecipient is fixed rather than driven by ADMIN_NOTIFICATION_EMAIL
 // — meeting requests always go to the inbox that owns scheduling.
 const meetingRequestRecipient = "consultprompts@gmail.com"

@@ -168,6 +168,72 @@ func (h *LeadHandler) GetLeads(c *gin.Context) {
 	})
 }
 
+func (h *LeadHandler) UpdateLead(c *gin.Context) {
+	userID, _ := c.Get(middleware.ContextUserID)
+	id := c.Param("id")
+
+	var req CreateLeadRequest
+	if strings.HasPrefix(c.ContentType(), "multipart/form-data") {
+		if err := c.ShouldBind(&req); err != nil {
+			respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+			return
+		}
+	} else {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+			return
+		}
+	}
+
+	if req.ExistingWebsiteURL != nil && *req.ExistingWebsiteURL != "" && !isValidHTTPURL(*req.ExistingWebsiteURL) {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", "existing_website_url must be a valid http(s) URL")
+		return
+	}
+	for _, u := range req.InspirationURLs {
+		if u != "" && !isValidHTTPURL(u) {
+			respondError(c, http.StatusBadRequest, "INVALID_INPUT", "inspiration_urls must be valid http(s) URLs")
+			return
+		}
+	}
+
+	lead := model.Lead{
+		Name:               req.Name,
+		Business:           req.Business,
+		Message:            req.Message,
+		ExistingWebsite:    req.ExistingWebsite,
+		ExistingWebsiteURL: req.ExistingWebsiteURL,
+		Location:           req.Location,
+		SiteGoal:           req.SiteGoal,
+		PagesNeeded:        req.PagesNeeded,
+		StyleDirection:     req.StyleDirection,
+		HasLogo:            req.HasLogo,
+		HasBrandColors:     req.HasBrandColors,
+		PrimaryColor:       req.PrimaryColor,
+		SecondaryColor:     req.SecondaryColor,
+		InspirationURLs:    req.InspirationURLs,
+		PhoneNumber:        req.PhoneNumber,
+		ContactMethod:      req.ContactMethod,
+		Timeline:           req.Timeline,
+		Package:            req.Package,
+		WantsCall:          req.WantsCall,
+	}
+
+	if err := h.leadService.UpdateLead(c.Request.Context(), id, userID.(string), lead); err != nil {
+		if errors.Is(err, service.ErrLeadNotPending) {
+			respondError(c, http.StatusConflict, "LEAD_NOT_PENDING", err.Error())
+			return
+		}
+		if err.Error() == "forbidden" {
+			respondError(c, http.StatusForbidden, "FORBIDDEN", err.Error())
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"ok": true})
+}
+
 func (h *LeadHandler) GetUserLeads(c *gin.Context) {
 	userID, _ := c.Get(middleware.ContextUserID)
 

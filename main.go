@@ -67,6 +67,7 @@ func main() {
 	protected.Use(middleware.RequireUserID())
 	{
 		protected.POST("/agency/leads", leadHandler.CreateLead)
+		protected.PATCH("/agency/leads/:id", leadHandler.UpdateLead)
 		protected.GET("/agency/leads/mine", leadHandler.GetUserLeads)
 		protected.POST("/agency/leads/:id/review", leadHandler.SubmitReview)
 		protected.PATCH("/agency/leads/:id/maintenance", leadHandler.SetWantsMaintenance)
