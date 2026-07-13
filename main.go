@@ -73,6 +73,7 @@ func main() {
 		protected.PATCH("/agency/leads/:id/maintenance", leadHandler.SetWantsMaintenance)
 		protected.POST("/agency/leads/:id/pay", leadHandler.MarkPaid)
 		protected.POST("/agency/leads/:id/request-meeting", leadHandler.RequestMeeting)
+		protected.GET("/agency/leads/:id/activity", leadHandler.GetLeadActivity)
 
 		admin := protected.Group("/")
 		admin.Use(middleware.RequireAdminRole())

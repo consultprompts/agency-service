@@ -473,6 +473,25 @@ func (h *LeadHandler) SetSuspended(c *gin.Context) {
 	respondOK(c, gin.H{"message": message, "status": newStatus})
 }
 
+// GetLeadActivity returns the client-visible activity timeline for a lead,
+// newest first.
+func (h *LeadHandler) GetLeadActivity(c *gin.Context) {
+	id := c.Param("id")
+	userID, _ := c.Get(middleware.ContextUserID)
+
+	activity, err := h.leadService.GetLeadActivity(c.Request.Context(), id, userID.(string))
+	if err != nil {
+		if err.Error() == "forbidden" {
+			respondError(c, http.StatusForbidden, "FORBIDDEN", "you do not own this lead")
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	respondOK(c, activity)
+}
+
 // RequestMeeting lets a client who skipped the initial 15-minute call ask for
 // one after all — only available while the meeting is still marked skipped.
 func (h *LeadHandler) RequestMeeting(c *gin.Context) {

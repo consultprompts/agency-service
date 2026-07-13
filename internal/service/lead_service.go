@@ -57,6 +57,26 @@ func NewLeadService(leadRepo *repository.LeadRepository, notifier LeadNotifier) 
 	return &LeadService{leadRepo: leadRepo, notifier: notifier}
 }
 
+// logActivity records a client-visible timeline entry. Best-effort: a logging
+// failure must never fail the state change it's attached to.
+func (s *LeadService) logActivity(ctx context.Context, leadID, eventType string, detail *string) {
+	if err := s.leadRepo.InsertActivity(ctx, leadID, eventType, detail); err != nil {
+		slog.Error("Failed to record lead activity", "lead_id", leadID, "event_type", eventType, "error", err)
+	}
+}
+
+// GetLeadActivity returns the client-visible timeline for a lead, newest first.
+func (s *LeadService) GetLeadActivity(ctx context.Context, leadID, userID string) ([]model.LeadActivity, error) {
+	lead, err := s.leadRepo.GetLeadByID(ctx, leadID)
+	if err != nil {
+		return nil, err
+	}
+	if lead.UserID != userID {
+		return nil, errors.New("forbidden")
+	}
+	return s.leadRepo.GetActivity(ctx, leadID)
+}
+
 var ErrLeadNotPending = errors.New("lead can only be edited while it is pending review")
 
 func (s *LeadService) UpdateLead(ctx context.Context, id, userID string, lead model.Lead) error {
@@ -108,6 +128,8 @@ func (s *LeadService) CreateLead(ctx context.Context, userID string, lead model.
 	if err != nil {
 		return nil, err
 	}
+
+	s.logActivity(ctx, created.ID, "project_submitted", nil)
 
 	// Notify asynchronously — email failures must not fail lead creation.
 	if s.notifier != nil {
@@ -177,6 +199,7 @@ func (s *LeadService) UpdateLeadMilestone(ctx context.Context, id string, milest
 
 	wasPending := lead.Status == "pending"
 	isAccept := milestoneIndex == model.MilestoneNone && wasPending
+	isMeetingCompleted := !isAccept && milestoneIndex == model.MilestoneMeeting && milestoneIndex > lead.MilestoneIndex
 
 	// When accepting a lead that skipped the intro call, the meeting milestone
 	// is already done — write MilestoneMeeting so the checklist reflects that.
@@ -186,6 +209,12 @@ func (s *LeadService) UpdateLeadMilestone(ctx context.Context, id string, milest
 
 	if err := s.leadRepo.UpdateLeadMilestone(ctx, id, milestoneIndex); err != nil {
 		return err
+	}
+
+	if isAccept {
+		s.logActivity(ctx, id, "lead_accepted", nil)
+	} else if isMeetingCompleted {
+		s.logActivity(ctx, id, "meeting_completed", nil)
 	}
 
 	if isAccept && s.notifier != nil {
@@ -227,6 +256,8 @@ func (s *LeadService) SetMockupURL(ctx context.Context, id, url, frontendURL str
 			return err
 		}
 	}
+
+	s.logActivity(ctx, id, "mockup_sent", nil)
 
 	if s.notifier != nil {
 		projectLink := frontendURL + "/my-projects"
@@ -271,7 +302,11 @@ func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision
 
 	switch decision {
 	case "accept":
-		return s.leadRepo.UpdateLeadMilestone(ctx, leadID, model.MilestoneApproved)
+		if err := s.leadRepo.UpdateLeadMilestone(ctx, leadID, model.MilestoneApproved); err != nil {
+			return err
+		}
+		s.logActivity(ctx, leadID, "design_approved", nil)
+		return nil
 
 	case "request_changes":
 		if feedback == "" {
@@ -288,6 +323,7 @@ func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision
 		if err := s.leadRepo.IncrementRevisionCount(ctx, leadID); err != nil {
 			return err
 		}
+		s.logActivity(ctx, leadID, "changes_requested", &feedback)
 		if s.notifier != nil {
 			go func(l model.Lead, fb string) {
 				if err := s.notifier.SendRevisionRequestEmail(l.Email, l.Business, fb); err != nil {
@@ -319,6 +355,8 @@ func (s *LeadService) CompleteSite(ctx context.Context, id, frontendURL string) 
 	if err := s.leadRepo.UpdateLeadMilestone(ctx, id, model.MilestoneWebsite); err != nil {
 		return err
 	}
+
+	s.logActivity(ctx, id, "website_completed", nil)
 
 	if s.notifier != nil {
 		projectLink := frontendURL + "/my-projects"
@@ -407,6 +445,9 @@ func (s *LeadService) recordPayment(ctx context.Context, lead *model.Lead) error
 		return err
 	}
 
+	paidDetail := fmt.Sprintf("$%d", total)
+	s.logActivity(ctx, lead.ID, "payment_completed", &paidDetail)
+
 	if s.notifier != nil {
 		// Reload to get the DB-generated domain_renewal_date.
 		updated, err := s.leadRepo.GetLeadByID(ctx, lead.ID)
@@ -447,6 +488,8 @@ func (s *LeadService) LaunchSite(ctx context.Context, id, siteURL string) error 
 	if err := s.leadRepo.SetLaunched(ctx, id, siteURL, model.MilestoneLive); err != nil {
 		return err
 	}
+
+	s.logActivity(ctx, id, "website_launched", &siteURL)
 
 	if s.notifier != nil {
 		slog.Info("Sending site launched email", "lead_id", lead.ID, "to", lead.Email)
@@ -550,6 +593,8 @@ func (s *LeadService) RequestMeeting(ctx context.Context, leadID, userID string)
 	if err := s.leadRepo.UpdateLeadMilestone(ctx, leadID, 0); err != nil {
 		return err
 	}
+
+	s.logActivity(ctx, leadID, "meeting_requested", nil)
 
 	if s.notifier != nil {
 		go func(l model.Lead) {

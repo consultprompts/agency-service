@@ -281,3 +281,32 @@ func (repo *LeadRepository) SetWantsCall(ctx context.Context, id string, wants b
 	_, err := repo.db.Exec(ctx, `UPDATE leads SET wants_call = $1 WHERE id = $2`, wants, id)
 	return err
 }
+
+func (repo *LeadRepository) InsertActivity(ctx context.Context, leadID, eventType string, detail *string) error {
+	_, err := repo.db.Exec(ctx,
+		`INSERT INTO lead_activity (lead_id, event_type, detail) VALUES ($1, $2, $3)`,
+		leadID, eventType, detail,
+	)
+	return err
+}
+
+func (repo *LeadRepository) GetActivity(ctx context.Context, leadID string) ([]model.LeadActivity, error) {
+	rows, err := repo.db.Query(ctx,
+		`SELECT id, lead_id, event_type, detail, created_at FROM lead_activity WHERE lead_id = $1 ORDER BY created_at DESC`,
+		leadID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	activity := make([]model.LeadActivity, 0)
+	for rows.Next() {
+		var a model.LeadActivity
+		if err := rows.Scan(&a.ID, &a.LeadID, &a.EventType, &a.Detail, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		activity = append(activity, a)
+	}
+	return activity, nil
+}
