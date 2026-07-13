@@ -276,3 +276,8 @@ func (repo *LeadRepository) SetWantsMaintenance(ctx context.Context, id string, 
 	_, err := repo.db.Exec(ctx, `UPDATE leads SET wants_maintenance = $1 WHERE id = $2`, wants, id)
 	return err
 }
+
+func (repo *LeadRepository) SetWantsCall(ctx context.Context, id string, wants bool) error {
+	_, err := repo.db.Exec(ctx, `UPDATE leads SET wants_call = $1 WHERE id = $2`, wants, id)
+	return err
+}

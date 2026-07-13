@@ -541,6 +541,16 @@ func (s *LeadService) RequestMeeting(ctx context.Context, leadID, userID string)
 		return errors.New("the meeting was not skipped for this project")
 	}
 
+	if err := s.leadRepo.SetWantsCall(ctx, leadID, true); err != nil {
+		return err
+	}
+
+	// Reset the milestone so the Meeting row shows as unchecked in the admin
+	// panel — the meeting hasn't happened yet, it's just been re-requested.
+	if err := s.leadRepo.UpdateLeadMilestone(ctx, leadID, 0); err != nil {
+		return err
+	}
+
 	if s.notifier != nil {
 		go func(l model.Lead) {
 			if err := s.notifier.SendMeetingRequestEmail(l.Name, l.Email, l.Business); err != nil {
