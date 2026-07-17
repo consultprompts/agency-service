@@ -2,34 +2,47 @@ package repository
 
 import (
 	"context"
+	"os"
 
 	"github.com/consultprompts/agency-service/internal/model"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type LeadRepository struct {
 	db *pgxpool.Pool
+	// publicURL is the gateway's externally-reachable base URL (NOT this
+	// service's own port — see docker-compose: agency-service has no host
+	// port mapping and is only reachable via the gateway). Used to compose
+	// browser-facing logo URLs; served images are always fetched through
+	// the gateway since a plain <img> tag can't attach this service's
+	// internal-only auth headers.
+	publicURL string
 }
 
 func NewLeadRepository(db *pgxpool.Pool) *LeadRepository {
-	return &LeadRepository{db: db}
+	return &LeadRepository{db: db, publicURL: os.Getenv("AGENCY_PUBLIC_URL")}
 }
 
+// leadColumns intentionally excludes logo_data — list/detail scans only need
+// logo_content_type (cheap) to know a logo exists; the actual bytes are
+// fetched separately by GetLeadLogo so paginated lead queries never drag
+// multi-MB blobs along for the ride.
 const leadColumns = `
 	id, user_id, name, email, business, message,
 	existing_website, existing_website_url,
 	location, site_goal, pages_needed, style_direction,
-	has_logo, logo_url, has_brand_colors, primary_color, secondary_color,
+	has_logo, logo_content_type, has_brand_colors, primary_color, secondary_color,
 	inspiration_urls, phone_number, contact_method, timeline,
 	package, wants_call, meeting_skipped, status, pre_suspend_status, milestone_index, created_at,
 	mockup_url, revision_feedback, revision_count, wants_maintenance,
 	is_paid, paid_at, payment_amount, site_url, domain_renewal_date
 `
 
-func scanLead(row interface {
+func (repo *LeadRepository) scanLead(row interface {
 	Scan(...any) error
 }, lead *model.Lead) error {
-	return row.Scan(
+	if err := row.Scan(
 		&lead.ID,
 		&lead.UserID,
 		&lead.Name,
@@ -43,7 +56,7 @@ func scanLead(row interface {
 		&lead.PagesNeeded,
 		&lead.StyleDirection,
 		&lead.HasLogo,
-		&lead.LogoURL,
+		&lead.LogoContentType,
 		&lead.HasBrandColors,
 		&lead.PrimaryColor,
 		&lead.SecondaryColor,
@@ -67,7 +80,15 @@ func scanLead(row interface {
 		&lead.PaymentAmount,
 		&lead.SiteURL,
 		&lead.DomainRenewalDate,
-	)
+	); err != nil {
+		return err
+	}
+
+	if lead.LogoContentType != nil && repo.publicURL != "" {
+		url := repo.publicURL + "/agency/leads/" + lead.ID + "/logo"
+		lead.LogoURL = &url
+	}
+	return nil
 }
 
 func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*model.Lead, error) {
@@ -76,16 +97,16 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 			user_id, name, email, business, message,
 			existing_website, existing_website_url,
 			location, site_goal, pages_needed, style_direction,
-			has_logo, logo_url, has_brand_colors, primary_color, secondary_color,
+			has_logo, logo_data, logo_content_type, has_brand_colors, primary_color, secondary_color,
 			inspiration_urls, phone_number, contact_method, timeline,
-			package, wants_call, meeting_skipped, milestone_index
+			package, wants_call, meeting_skipped, milestone_index, status
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7,
 			$8, $9, $10, $11,
-			$12, $13, $14, $15, $16,
-			$17, $18, $19, $20,
-			$21, $22, $23, $24
+			$12, $13, $14, $15, $16, $17,
+			$18, $19, $20, $21,
+			$22, $23, $24, $25, $26
 		)
 		RETURNING id, status, milestone_index, created_at
 	`
@@ -103,7 +124,8 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 		lead.PagesNeeded,
 		lead.StyleDirection,
 		lead.HasLogo,
-		lead.LogoURL,
+		lead.LogoData,
+		lead.LogoContentType,
 		lead.HasBrandColors,
 		lead.PrimaryColor,
 		lead.SecondaryColor,
@@ -115,6 +137,7 @@ func (repo *LeadRepository) CreateLead(ctx context.Context, lead model.Lead) (*m
 		lead.WantsCall,
 		lead.MeetingSkipped,
 		lead.MilestoneIndex,
+		lead.Status,
 	).Scan(&lead.ID, &lead.Status, &lead.MilestoneIndex, &lead.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -127,7 +150,7 @@ func (repo *LeadRepository) GetLeadByID(ctx context.Context, id string) (*model.
 	query := `SELECT` + leadColumns + `FROM leads WHERE id = $1`
 
 	var lead model.Lead
-	if err := scanLead(repo.db.QueryRow(ctx, query, id), &lead); err != nil {
+	if err := repo.scanLead(repo.db.QueryRow(ctx, query, id), &lead); err != nil {
 		return nil, err
 	}
 
@@ -146,7 +169,7 @@ func (repo *LeadRepository) GetLeads(ctx context.Context, limit, offset int) ([]
 	leads := make([]model.Lead, 0)
 	for rows.Next() {
 		var lead model.Lead
-		if err := scanLead(rows, &lead); err != nil {
+		if err := repo.scanLead(rows, &lead); err != nil {
 			return nil, err
 		}
 		leads = append(leads, lead)
@@ -182,6 +205,20 @@ func (repo *LeadRepository) UpdateLead(ctx context.Context, id string, lead mode
 	return err
 }
 
+// AttachLeadUser claims an unattached lead for userID. The user_id IS NULL
+// guard makes the claim atomic: it reports false when the lead was already
+// attached (or doesn't exist), so concurrent redeems can't reassign a lead.
+func (repo *LeadRepository) AttachLeadUser(ctx context.Context, id, userID string) (bool, error) {
+	tag, err := repo.db.Exec(ctx,
+		`UPDATE leads SET user_id = $1 WHERE id = $2 AND user_id IS NULL`,
+		userID, id,
+	)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 func (repo *LeadRepository) HasActiveLead(ctx context.Context, userID string) (bool, error) {
 	var count int
 	err := repo.db.QueryRow(ctx,
@@ -203,7 +240,7 @@ func (repo *LeadRepository) GetLeadsByUserID(ctx context.Context, userID string)
 	leads := make([]model.Lead, 0)
 	for rows.Next() {
 		var lead model.Lead
-		if err := scanLead(rows, &lead); err != nil {
+		if err := repo.scanLead(rows, &lead); err != nil {
 			return nil, err
 		}
 		leads = append(leads, lead)
@@ -233,6 +270,39 @@ func (repo *LeadRepository) SetLaunched(ctx context.Context, id, siteURL string,
 	_, err := repo.db.Exec(ctx,
 		`UPDATE leads SET milestone_index = $1, status = 'launched', site_url = $2 WHERE id = $3`,
 		milestoneIndex, siteURL, id,
+	)
+	return err
+}
+
+// GetLeadLogo fetches the raw logo bytes for a single lead — kept separate
+// from leadColumns/scanLead so listing/detail queries never pull the blob.
+// Returns pgx.ErrNoRows both when the lead doesn't exist and when it exists
+// but has no logo stored, since callers (the public logo endpoint) treat
+// both cases identically as 404.
+func (repo *LeadRepository) GetLeadLogo(ctx context.Context, id string) ([]byte, string, error) {
+	var data []byte
+	var contentType *string
+	err := repo.db.QueryRow(ctx,
+		`SELECT logo_data, logo_content_type FROM leads WHERE id = $1`,
+		id,
+	).Scan(&data, &contentType)
+	if err != nil {
+		return nil, "", err
+	}
+	if data == nil || contentType == nil {
+		return nil, "", pgx.ErrNoRows
+	}
+	return data, *contentType, nil
+}
+
+// SetLeadLogo updates a pending lead's stored logo. Called from UpdateLead
+// only when the edit request actually included a new file — never as part
+// of the main UpdateLead UPDATE, so editing a lead without re-uploading a
+// logo can't accidentally wipe the one already on file.
+func (repo *LeadRepository) SetLeadLogo(ctx context.Context, id string, data []byte, contentType string) error {
+	_, err := repo.db.Exec(ctx,
+		`UPDATE leads SET logo_data = $1, logo_content_type = $2 WHERE id = $3`,
+		data, contentType, id,
 	)
 	return err
 }

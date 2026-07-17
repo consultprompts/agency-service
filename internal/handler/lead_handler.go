@@ -4,9 +4,12 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -53,38 +56,125 @@ type CreateLeadRequest struct {
 	Timeline           *string  `json:"timeline"            form:"timeline"`
 	Package            *string  `json:"package"             form:"package"`
 	WantsCall          bool     `json:"wants_call"          form:"wants_call"`
+	// LogoFile is only populated by Gin's multipart binding — a plain JSON
+	// request (no file attached) leaves it nil.
+	LogoFile           *multipart.FileHeader `form:"logo_file"`
+}
+
+const maxLogoBytes = 5 << 20 // 5MB
+
+var allowedLogoTypes = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/webp": true,
+	"image/gif":  true,
+}
+
+// readLogoFile reads and validates an uploaded logo, enforcing a size cap
+// and sniffing the real content type (never trusting the client-supplied
+// one) so only actual raster images end up stored and served back out.
+func readLogoFile(fh *multipart.FileHeader) ([]byte, string, error) {
+	if fh.Size > maxLogoBytes {
+		return nil, "", fmt.Errorf("logo file must be %dMB or smaller", maxLogoBytes>>20)
+	}
+
+	f, err := fh.Open()
+	if err != nil {
+		return nil, "", err
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, maxLogoBytes+1))
+	if err != nil {
+		return nil, "", err
+	}
+	if len(data) > maxLogoBytes {
+		return nil, "", fmt.Errorf("logo file must be %dMB or smaller", maxLogoBytes>>20)
+	}
+
+	contentType := http.DetectContentType(data)
+	if !allowedLogoTypes[contentType] {
+		return nil, "", errors.New("logo must be a PNG, JPEG, GIF, or WebP image")
+	}
+	return data, contentType, nil
+}
+
+// withLogo reads req.LogoFile (if present) and attaches it to lead. Shared by
+// CreateLead/UpdateLead/InviteLead so a validation failure gets the same
+// 400 response from all three. Returns false after writing the error
+// response when the file is invalid.
+func withLogo(c *gin.Context, req CreateLeadRequest, lead *model.Lead) bool {
+	if req.LogoFile == nil {
+		return true
+	}
+	data, contentType, err := readLogoFile(req.LogoFile)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return false
+	}
+	lead.LogoData = data
+	lead.LogoContentType = &contentType
+	return true
 }
 
 func (h *LeadHandler) CreateLead(c *gin.Context) {
 	userID, _ := c.Get(middleware.ContextUserID)
 
 	var req CreateLeadRequest
-	if strings.HasPrefix(c.ContentType(), "multipart/form-data") {
-		if err := c.ShouldBind(&req); err != nil {
-			respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+	if !bindLeadRequest(c, &req) {
+		return
+	}
+
+	lead := leadFromRequest(req)
+	if !withLogo(c, req, &lead) {
+		return
+	}
+
+	created, err := h.leadService.CreateLead(c.Request.Context(), userID.(string), lead)
+	if err != nil {
+		if errors.Is(err, service.ErrActiveLeadExists) {
+			respondError(c, http.StatusConflict, "ACTIVE_LEAD_EXISTS", err.Error())
 			return
 		}
-		// Logo file upload — TODO: store to object storage and set LogoURL on the lead.
-		// For now the file is accepted but not persisted.
-	} else {
-		if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	respondCreated(c, created)
+}
+
+// bindLeadRequest binds a lead payload (JSON or multipart) and runs the URL
+// validations shared by create/update/invite. Returns false after writing the
+// error response when the payload is invalid.
+func bindLeadRequest(c *gin.Context, req *CreateLeadRequest) bool {
+	if strings.HasPrefix(c.ContentType(), "multipart/form-data") {
+		if err := c.ShouldBind(req); err != nil {
 			respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
-			return
+			return false
+		}
+	} else {
+		if err := c.ShouldBindJSON(req); err != nil {
+			respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+			return false
 		}
 	}
 
 	if req.ExistingWebsiteURL != nil && *req.ExistingWebsiteURL != "" && !isValidHTTPURL(*req.ExistingWebsiteURL) {
 		respondError(c, http.StatusBadRequest, "INVALID_INPUT", "existing_website_url must be a valid http(s) URL")
-		return
+		return false
 	}
 	for _, u := range req.InspirationURLs {
 		if u != "" && !isValidHTTPURL(u) {
 			respondError(c, http.StatusBadRequest, "INVALID_INPUT", "inspiration_urls must be valid http(s) URLs")
-			return
+			return false
 		}
 	}
+	return true
+}
 
-	lead := model.Lead{
+// leadFromRequest maps the bound payload onto the model.
+func leadFromRequest(req CreateLeadRequest) model.Lead {
+	return model.Lead{
 		Name:               req.Name,
 		Email:              req.Email,
 		Business:           req.Business,
@@ -106,18 +196,95 @@ func (h *LeadHandler) CreateLead(c *gin.Context) {
 		Package:            req.Package,
 		WantsCall:          req.WantsCall,
 	}
+}
 
-	created, err := h.leadService.CreateLead(c.Request.Context(), userID.(string), lead)
+// InviteLead (admin only) creates an unattached lead on a client's behalf and
+// emails them a redeem link. The payload's email field is the client's
+// address — both where the invite is sent and the contact stored on the lead.
+func (h *LeadHandler) InviteLead(c *gin.Context) {
+	var req CreateLeadRequest
+	if !bindLeadRequest(c, &req) {
+		return
+	}
+
+	lead := leadFromRequest(req)
+	if !withLogo(c, req, &lead) {
+		return
+	}
+
+	frontendURL := os.Getenv("FRONTEND_URL")
+	created, redeemURL, err := h.leadService.InviteLead(c.Request.Context(), lead, frontendURL)
 	if err != nil {
-		if errors.Is(err, service.ErrActiveLeadExists) {
-			respondError(c, http.StatusConflict, "ACTIVE_LEAD_EXISTS", err.Error())
+		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return
+	}
+
+	respondCreated(c, gin.H{"id": created.ID, "redeem_url": redeemURL})
+}
+
+// Redeem input is user-typed in the manual flow, so a malformed UUID is an
+// expected "invalid ID" case, not a database error.
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// GetLeadLogo serves a lead's stored logo bytes. Deliberately unauthenticated
+// and registered outside the JWT-protected group at both the gateway and here
+// — a plain <img src> can't attach an Authorization header, and a lead's
+// UUID is already treated as the bearer credential for this app (see
+// RedeemLead); a business logo bound for a public website isn't sensitive
+// enough to warrant a blob-fetch-and-object-URL dance on the frontend.
+func (h *LeadHandler) GetLeadLogo(c *gin.Context) {
+	id := c.Param("id")
+	if !uuidPattern.MatchString(id) {
+		c.Status(http.StatusNotFound)
+		return
+	}
+
+	data, contentType, err := h.leadService.GetLeadLogo(c.Request.Context(), id)
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+
+	c.Header("Cache-Control", "public, max-age=3600")
+	c.Data(http.StatusOK, contentType, data)
+}
+
+type RedeemLeadRequest struct {
+	LeadID string `json:"lead_id" binding:"required"`
+}
+
+// RedeemLead attaches an unattached lead to the calling user — shared by the
+// email redeem link and the manual "Redeem Project" form.
+func (h *LeadHandler) RedeemLead(c *gin.Context) {
+	userID, _ := c.Get(middleware.ContextUserID)
+
+	var req RedeemLeadRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
+		return
+	}
+
+	leadID := strings.TrimSpace(req.LeadID)
+	if !uuidPattern.MatchString(leadID) {
+		respondError(c, http.StatusNotFound, "INVALID_ID", service.ErrLeadNotFound.Error())
+		return
+	}
+
+	lead, err := h.leadService.RedeemLead(c.Request.Context(), leadID, userID.(string))
+	if err != nil {
+		if errors.Is(err, service.ErrLeadNotFound) {
+			respondError(c, http.StatusNotFound, "INVALID_ID", err.Error())
+			return
+		}
+		if errors.Is(err, service.ErrAlreadyRedeemed) {
+			respondError(c, http.StatusConflict, "ALREADY_REDEEMED", err.Error())
 			return
 		}
 		respondError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
 
-	respondCreated(c, created)
+	respondOK(c, lead)
 }
 
 const (
@@ -173,49 +340,13 @@ func (h *LeadHandler) UpdateLead(c *gin.Context) {
 	id := c.Param("id")
 
 	var req CreateLeadRequest
-	if strings.HasPrefix(c.ContentType(), "multipart/form-data") {
-		if err := c.ShouldBind(&req); err != nil {
-			respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
-			return
-		}
-	} else {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			respondError(c, http.StatusBadRequest, "INVALID_INPUT", err.Error())
-			return
-		}
-	}
-
-	if req.ExistingWebsiteURL != nil && *req.ExistingWebsiteURL != "" && !isValidHTTPURL(*req.ExistingWebsiteURL) {
-		respondError(c, http.StatusBadRequest, "INVALID_INPUT", "existing_website_url must be a valid http(s) URL")
+	if !bindLeadRequest(c, &req) {
 		return
 	}
-	for _, u := range req.InspirationURLs {
-		if u != "" && !isValidHTTPURL(u) {
-			respondError(c, http.StatusBadRequest, "INVALID_INPUT", "inspiration_urls must be valid http(s) URLs")
-			return
-		}
-	}
 
-	lead := model.Lead{
-		Name:               req.Name,
-		Business:           req.Business,
-		Message:            req.Message,
-		ExistingWebsite:    req.ExistingWebsite,
-		ExistingWebsiteURL: req.ExistingWebsiteURL,
-		Location:           req.Location,
-		SiteGoal:           req.SiteGoal,
-		PagesNeeded:        req.PagesNeeded,
-		StyleDirection:     req.StyleDirection,
-		HasLogo:            req.HasLogo,
-		HasBrandColors:     req.HasBrandColors,
-		PrimaryColor:       req.PrimaryColor,
-		SecondaryColor:     req.SecondaryColor,
-		InspirationURLs:    req.InspirationURLs,
-		PhoneNumber:        req.PhoneNumber,
-		ContactMethod:      req.ContactMethod,
-		Timeline:           req.Timeline,
-		Package:            req.Package,
-		WantsCall:          req.WantsCall,
+	lead := leadFromRequest(req)
+	if !withLogo(c, req, &lead) {
+		return
 	}
 
 	if err := h.leadService.UpdateLead(c.Request.Context(), id, userID.(string), lead); err != nil {

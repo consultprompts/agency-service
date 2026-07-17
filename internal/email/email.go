@@ -57,6 +57,41 @@ func (c *Client) SendLeadConfirmation(lead model.Lead) error {
 	})
 }
 
+// SendLeadInviteEmail invites a client to claim a project an admin created on
+// their behalf — the button opens the site's redeem link, which attaches the
+// project to their account (after login/registration if needed).
+func (c *Client) SendLeadInviteEmail(to, business, redeemLink string) error {
+	safeBusiness := html.EscapeString(business)
+	body := fmt.Sprintf(`
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:24px;"><tr>
+      <td width="56" height="56" style="width:56px; height:56px; background:rgba(0,240,255,0.1); border-radius:28px; text-align:center; vertical-align:middle;">
+        <span style="font-size:22px; line-height:56px; display:block;">&#127873;</span>
+      </td>
+    </tr></table>
+    <h2 style="margin:0 0 10px; font-family:'Space Grotesk',Georgia,serif; font-style:italic; font-size:26px; font-weight:700; letter-spacing:-0.02em; color:#ffffff;">Your Project is Waiting!</h2>
+    <p style="margin:0 0 30px; color:#A1A1A1; font-size:14px; font-weight:300; line-height:1.7;">We've set up the website project for <strong style="color:#ffffff;">%s</strong> on your behalf. Claim it below to track every milestone — from mockup to launch — in your own dashboard. If you don't have an account yet you can create one in a few seconds.</p>
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:28px;"><tr>
+      <td style="background:#00F0FF; border-radius:8px;">
+        <a href="%s" style="display:inline-block; padding:15px 30px; font-size:12px; font-weight:900; letter-spacing:0.14em; text-transform:uppercase; color:#050505; text-decoration:none; font-family:'Inter',Arial,Helvetica,sans-serif;">Claim My Project</a>
+      </td>
+    </tr></table>
+    <p style="margin:0 0 6px; font-size:12px; color:#555555; line-height:1.6;">Button not working? Paste this link into your browser:</p>
+    <p style="margin:0 0 24px; font-size:12px; color:#A1A1A1; line-height:1.6; word-break:break-all;">%s</p>
+    <p style="margin:0; font-size:12px; color:#555555; line-height:1.6;">Have questions? Just reply to this email — we read every one.</p>
+`, safeBusiness, redeemLink, redeemLink)
+
+	_, err := c.resend.Emails.Send(&resend.SendEmailRequest{
+		From:    c.from,
+		To:      []string{to},
+		Subject: "Your website project is ready to claim — consultprompts.com",
+		Html:    openEmail() + body + closeEmail(),
+	})
+	if err != nil {
+		slog.Error("Failed to send lead invite email", "to", to, "error", err)
+	}
+	return err
+}
+
 // SendMockupReadyEmail notifies the client that their mockup is ready to review.
 func (c *Client) SendMockupReadyEmail(to, projectLink string) error {
 	body := fmt.Sprintf(`

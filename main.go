@@ -63,10 +63,15 @@ func main() {
 	// registered outside the RequireUserID group. See handler.PaymentWebhook.
 	router.POST("/webhooks/payment-success", leadHandler.PaymentWebhook)
 
+	// Public: a plain <img> tag can't attach an Authorization header. See
+	// handler.GetLeadLogo for the trust-model rationale.
+	router.GET("/agency/leads/:id/logo", leadHandler.GetLeadLogo)
+
 	protected := router.Group("/")
 	protected.Use(middleware.RequireUserID())
 	{
 		protected.POST("/agency/leads", leadHandler.CreateLead)
+		protected.POST("/agency/leads/redeem", leadHandler.RedeemLead)
 		protected.PATCH("/agency/leads/:id", leadHandler.UpdateLead)
 		protected.GET("/agency/leads/mine", leadHandler.GetUserLeads)
 		protected.POST("/agency/leads/:id/review", leadHandler.SubmitReview)
@@ -79,6 +84,7 @@ func main() {
 		admin.Use(middleware.RequireAdminRole())
 		{
 			admin.GET("/agency/leads", leadHandler.GetLeads)
+			admin.POST("/agency/leads/invite", leadHandler.InviteLead)
 			admin.PATCH("/agency/leads/:id/milestone", leadHandler.UpdateLeadMilestone)
 			admin.PATCH("/agency/leads/:id/mockup", leadHandler.SetMockupURL)
 			admin.PATCH("/agency/leads/:id/complete", leadHandler.CompleteSite)

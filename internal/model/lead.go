@@ -4,7 +4,8 @@ import "time"
 
 type Lead struct {
 	ID                 string    `json:"id"`
-	UserID             string    `json:"user_id"`
+	// UserID is nil for admin-invited leads that haven't been redeemed yet.
+	UserID             *string   `json:"user_id"`
 	Name               string    `json:"name"`
 	Email              string    `json:"email"`
 	Business           string    `json:"business"`
@@ -16,7 +17,15 @@ type Lead struct {
 	PagesNeeded        []string  `json:"pages_needed,omitempty"`
 	StyleDirection     *string   `json:"style_direction,omitempty"`
 	HasLogo            *bool     `json:"has_logo,omitempty"`
+	// LogoURL is computed (never client-supplied) — populated when
+	// LogoContentType is set, pointing at GET /agency/leads/:id/logo.
 	LogoURL            *string   `json:"logo_url,omitempty"`
+	// LogoData holds the raw uploaded bytes. Only populated on the write path
+	// (handler -> CreateLead/SetLeadLogo) and by GetLeadLogo when serving the
+	// image — deliberately left out of the list/detail SELECT so paginated
+	// lead queries don't drag multi-MB blobs along for the ride.
+	LogoData           []byte    `json:"-"`
+	LogoContentType    *string   `json:"-"`
 	HasBrandColors     *bool     `json:"has_brand_colors,omitempty"`
 	PrimaryColor       *string   `json:"primary_color,omitempty"`
 	SecondaryColor     *string   `json:"secondary_color,omitempty"`

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/consultprompts/agency-service/internal/model"
 	"github.com/consultprompts/agency-service/internal/repository"
 )
@@ -26,6 +28,7 @@ type LeadNotifier interface {
 	SendMeetingRequestEmail(clientName, clientEmail, business string) error
 	SendProjectSuspendedEmail(to, name, business string) error
 	SendProjectReactivatedEmail(to, name, business string) error
+	SendLeadInviteEmail(to, business, redeemLink string) error
 }
 
 // Package pricing — must stay in sync with website/src/data/content.tsx PACKAGES.
@@ -47,6 +50,12 @@ const (
 )
 
 var ErrActiveLeadExists = errors.New("you already have an active lead; a new one can be submitted once the current lead is completed")
+
+// ownedBy reports whether the lead is attached to userID. Unattached
+// (invited, not yet redeemed) leads are owned by nobody.
+func ownedBy(lead *model.Lead, userID string) bool {
+	return lead.UserID != nil && *lead.UserID == userID
+}
 
 type LeadService struct {
 	leadRepo *repository.LeadRepository
@@ -71,7 +80,7 @@ func (s *LeadService) GetLeadActivity(ctx context.Context, leadID, userID string
 	if err != nil {
 		return nil, err
 	}
-	if lead.UserID != userID {
+	if !ownedBy(lead, userID) {
 		return nil, errors.New("forbidden")
 	}
 	return s.leadRepo.GetActivity(ctx, leadID)
@@ -84,14 +93,14 @@ func (s *LeadService) UpdateLead(ctx context.Context, id, userID string, lead mo
 	if err != nil {
 		return err
 	}
-	if existing.UserID != userID {
+	if !ownedBy(existing, userID) {
 		return errors.New("forbidden")
 	}
 	if existing.Status != "pending" {
 		return ErrLeadNotPending
 	}
 
-	lead.UserID = userID
+	lead.UserID = &userID
 	if !lead.WantsCall {
 		lead.MeetingSkipped = true
 		lead.MilestoneIndex = model.MilestoneMeeting
@@ -100,7 +109,26 @@ func (s *LeadService) UpdateLead(ctx context.Context, id, userID string, lead mo
 		lead.MilestoneIndex = model.MilestoneNone
 	}
 
-	return s.leadRepo.UpdateLead(ctx, id, lead)
+	if err := s.leadRepo.UpdateLead(ctx, id, lead); err != nil {
+		return err
+	}
+
+	// Only touch the stored logo when this edit actually included a new
+	// file — the main UpdateLead UPDATE never writes logo_data, so an edit
+	// that didn't re-upload a logo leaves the existing one untouched.
+	if lead.LogoData != nil {
+		if err := s.leadRepo.SetLeadLogo(ctx, id, lead.LogoData, *lead.LogoContentType); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// GetLeadLogo returns the raw logo bytes and content type for a lead. Public
+// endpoint (no ownership check) — see handler.GetLeadLogo for why.
+func (s *LeadService) GetLeadLogo(ctx context.Context, leadID string) ([]byte, string, error) {
+	return s.leadRepo.GetLeadLogo(ctx, leadID)
 }
 
 func (s *LeadService) CreateLead(ctx context.Context, userID string, lead model.Lead) (*model.Lead, error) {
@@ -112,7 +140,7 @@ func (s *LeadService) CreateLead(ctx context.Context, userID string, lead model.
 		return nil, ErrActiveLeadExists
 	}
 
-	lead.UserID = userID
+	lead.UserID = &userID
 	lead.Status = "pending"
 
 	// Skipping the 15-minute call means there's nothing to wait on — check
@@ -144,6 +172,82 @@ func (s *LeadService) CreateLead(ctx context.Context, userID string, lead model.
 	}
 
 	return created, nil
+}
+
+var (
+	ErrLeadNotFound    = errors.New("no project found with that ID")
+	ErrAlreadyRedeemed = errors.New("this project has already been redeemed")
+)
+
+// InviteLead creates a lead on a client's behalf (admin flow). The lead is
+// stored unattached (user_id NULL) and the client receives an email with a
+// redeem link that attaches it to their account. Returns the created lead and
+// the redeem URL so the admin UI can surface it even when email is disabled.
+func (s *LeadService) InviteLead(ctx context.Context, lead model.Lead, frontendURL string) (*model.Lead, string, error) {
+	lead.UserID = nil
+	// Admin-created leads skip the review queue: the admin filling the form IS
+	// the acceptance, so the project lands in the client's dashboard already
+	// in progress rather than "Under Review".
+	lead.Status = "accepted"
+	if !lead.WantsCall {
+		lead.MeetingSkipped = true
+		lead.MilestoneIndex = model.MilestoneMeeting
+	}
+
+	created, err := s.leadRepo.CreateLead(ctx, lead)
+	if err != nil {
+		return nil, "", err
+	}
+
+	s.logActivity(ctx, created.ID, "project_submitted", nil)
+	s.logActivity(ctx, created.ID, "lead_accepted", nil)
+
+	redeemURL := frontendURL + "/redeem?leadId=" + created.ID
+	if s.notifier != nil {
+		go func(l model.Lead, link string) {
+			if err := s.notifier.SendLeadInviteEmail(l.Email, l.Business, link); err != nil {
+				slog.Error("Failed to send lead invite email", "lead_id", l.ID, "to", l.Email, "error", err)
+			}
+		}(*created, redeemURL)
+	} else {
+		slog.Warn("Lead invite email skipped — email not configured", "lead_id", created.ID)
+	}
+
+	return created, redeemURL, nil
+}
+
+// RedeemLead attaches an unattached (admin-invited) lead to the calling user.
+// Shared by the email redeem link and the manual "Redeem Project" form.
+// Re-redeeming a lead you already own is an idempotent no-op; a lead owned by
+// someone else is never reassigned.
+func (s *LeadService) RedeemLead(ctx context.Context, leadID, userID string) (*model.Lead, error) {
+	lead, err := s.leadRepo.GetLeadByID(ctx, leadID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrLeadNotFound
+		}
+		return nil, err
+	}
+
+	if lead.UserID != nil {
+		if *lead.UserID == userID {
+			return lead, nil
+		}
+		return nil, ErrAlreadyRedeemed
+	}
+
+	claimed, err := s.leadRepo.AttachLeadUser(ctx, leadID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !claimed {
+		// Lost a race with another redeem between the read and the update.
+		return nil, ErrAlreadyRedeemed
+	}
+
+	lead.UserID = &userID
+	s.logActivity(ctx, leadID, "project_redeemed", nil)
+	return lead, nil
 }
 
 func (s *LeadService) GetLeads(ctx context.Context, page, limit int) ([]model.Lead, int, error) {
@@ -293,7 +397,7 @@ func (s *LeadService) SubmitReview(ctx context.Context, leadID, userID, decision
 	if err != nil {
 		return err
 	}
-	if lead.UserID != userID {
+	if !ownedBy(lead, userID) {
 		return errors.New("forbidden")
 	}
 	if lead.MockupURL == nil || lead.MilestoneIndex != model.MilestoneMockup {
@@ -381,7 +485,7 @@ func (s *LeadService) SetWantsMaintenance(ctx context.Context, leadID, userID st
 	if err != nil {
 		return err
 	}
-	if lead.UserID != userID {
+	if !ownedBy(lead, userID) {
 		return errors.New("forbidden")
 	}
 	return s.leadRepo.SetWantsMaintenance(ctx, leadID, wants)
@@ -394,7 +498,7 @@ func (s *LeadService) MarkPaid(ctx context.Context, leadID, userID string) error
 	if err != nil {
 		return err
 	}
-	if lead.UserID != userID {
+	if !ownedBy(lead, userID) {
 		return errors.New("forbidden")
 	}
 	return s.recordPayment(ctx, lead)
@@ -577,7 +681,7 @@ func (s *LeadService) RequestMeeting(ctx context.Context, leadID, userID string)
 	if err != nil {
 		return err
 	}
-	if lead.UserID != userID {
+	if !ownedBy(lead, userID) {
 		return errors.New("forbidden")
 	}
 	if !lead.MeetingSkipped {
